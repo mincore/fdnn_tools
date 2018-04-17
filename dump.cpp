@@ -7,8 +7,11 @@
  * ===================================================
  */
 #include <stdlib.h>
-#include <kx/kx_file.h>
-#include "CLI11.hpp"
+
+#include "kx/kx_file.h"
+#include "kx/CLI11.hpp"
+
+using namespace kx;
 
 static inline void le_print(char *p, int size) {
     for (int i=size-1; i>=0; i--)
@@ -53,7 +56,7 @@ int main(int argc, char *argv[])
     }
 
     std::vector<char> data;
-    if (read_file(input_file, data, 0, offset * bytes) <= 0) {
+    if (read_file(input_file, data, offset * bytes) <= 0) {
         printf("can not read file: \"%s\"\n", input_file.c_str());
         return -1;
     }

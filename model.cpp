@@ -11,13 +11,15 @@
 #include <assert.h>
 #include <string.h>
 
-#include <kx/kx_file.h>
-#include "CLI11.hpp"
+#include "kx/kx_file.h"
+#include "kx/CLI11.hpp"
 
 #define STRIDE 32
 #define HALF_STRIDE (STRIDE/2)
 
 typedef unsigned int u32;
+
+using namespace kx;
 
 static inline int round_up(int x, int base) {
     return base * (x/base + (!!x%base));

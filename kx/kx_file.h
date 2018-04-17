@@ -13,7 +13,17 @@
 #include <stdarg.h>
 #include <vector>
 #include <string>
-#include <boost/noncopyable.hpp>
+
+namespace kx {
+
+class noncopyable {
+protected:
+    noncopyable () {}
+    ~noncopyable () {}
+private:
+    noncopyable (const noncopyable &);
+    noncopyable & operator = (const noncopyable &);
+};
 
 template<typename... Args>
 std::string string_format(const char* fmt, Args... args)
@@ -26,7 +36,7 @@ std::string string_format(const char* fmt, Args... args)
     return buf;
 }
 
-class file: private boost::noncopyable {
+class file: private noncopyable {
 public:
     ~file() { if (fp_) fclose(fp_); }
 
@@ -46,13 +56,13 @@ public:
             if (-1 == fseek(fp_, offset, SEEK_SET))
                 return -1;
         }
+
         size_t ret = fread(data, 1, size, fp_);
+
         if (ferror(fp_))
             return -1;
-        if (feof(fp_))
-            size = size_ - offset;
 
-        return size;
+        return ret;
     }
 
     size_t write(const void *data, size_t size, off_t offset = 0) {
@@ -60,7 +70,7 @@ public:
             if (-1 == fseek(fp_, offset, SEEK_SET))
                 return -1;
         }
-        return fwrite(data, size, 1, fp_);
+        return fwrite(data, 1, size, fp_);
     }
 
     size_t size() {
@@ -72,26 +82,29 @@ private:
     FILE *fp_ = NULL;
 };
 
-template<typename T>
-static size_t read_file(const std::string &filename, std::vector<T> &data, size_t size = 0, off_t offset = 0)
+static size_t read_file(const std::string &filename, void *data, size_t size, off_t offset = 0)
 {
     file file;
     if (!file.open(filename, "r")) {
         return -1;
     }
 
-    if (offset >= file.size()) {
+    return file.read(data, size, offset);
+}
+
+template<typename T>
+static size_t read_file(const std::string &filename, std::vector<T> &data, off_t offset = 0)
+{
+    file file;
+    if (!file.open(filename, "r")) {
         return -1;
     }
 
-    if (size == 0 || offset + size >= file.size())
-        size = file.size() - offset;
+    size_t size = (file.size() - offset) / sizeof(T);
+    if (size == 0)
+        return 0;
 
-    if (size < sizeof(T))
-        return -1;
-
-    data.resize(size/sizeof(T));
-
+    data.resize(size);
     return file.read(&data[0], data.size()*sizeof(T), offset);
 }
 
@@ -108,6 +121,8 @@ template<typename T>
 static int write_file(const std::string &filename, const std::vector<T> &data, off_t offset = 0)
 {
     return write_file(filename, &data[0], data.size()*sizeof(T), offset);
+}
+
 }
 
 #endif
