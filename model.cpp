@@ -105,92 +105,103 @@ struct weight {
     }
 };
 
-static bool gen_bias(const std::vector<u32> &input, std::vector<u32> &output) {
-    int h = input.size() / 2;
-    output.resize(h*STRIDE);
-
-    for (int i=0; i<(int)input.size(); i++) {
-        int k = (i/2)*STRIDE + (i%2);
-        output[k] = input[i];
+class conv_fcw {
+public:
+    conv_fcw(int input_count, int output_count):
+        input_count_(input_count), output_count_(output_count) {
+        cell_n_stride_ = (round_up(input_count, block_n_pixel_) / block_n_pixel_) * block_n_stride_;
     }
 
-    return true;
-}
-
-static bool gen_fcb(const std::vector<u32> &input, std::vector<u32> &output) {
-    int h = input.size();
-    output.resize(h*STRIDE);
-
-    for (int i=0; i<(int)input.size(); i++) {
-        int k = i*STRIDE;
-        output[k] = input[i];
-    }
-
-    return true;
-}
-
-static bool gen_conv_fcw(int input_count, int output_count, const std::vector<u32> &input, std::vector<u32> &output) {
-    if ((int)input.size() < input_count * output_count)
-        return -1;
-
-    int group_n_stride = 3;
-    int block_n_stride = 15;
-    int cell_n_stride = (round_up(input_count, 480) / 480 ) * block_n_stride;
-    int cell_n_group = cell_n_stride / group_n_stride;
-
-    output.resize(cell_n_stride * output_count * STRIDE);
-
-    auto fill_group = [&](int cell, int group, const u32* &data, int &count) {
-        int addr = cell * cell_n_stride * STRIDE + (group/2) * group_n_stride * STRIDE;
-
+    int get_fpga_addr(int cell, int group) {
+        int addr = cell * cell_n_stride_ * STRIDE + (group/2) * group_n_stride_ * STRIDE;
         if (group%2)
             addr += HALF_STRIDE;
-
-        for (int i=0; i<group_n_stride && count; i++) {
-            int n = std::min(count, HALF_STRIDE);
-            if (cell == 1 && group == 3) {
-                memset(&output[addr], 0xaa, n*sizeof(u32));
-            }
-            else {
-                memcpy(&output[addr], data, n*sizeof(u32));
-            }
-            addr += STRIDE;
-            count -= n;
-            data += n;
-        }
-    };
-
-    const u32 *data = &input[0];
-
-    for (int cell = 0; cell < output_count; cell++) {
-        int count = input_count;
-        for (int group = 0; group < cell_n_group; group++) {
-            fill_group(cell, group, data, count);
-        }
+        return addr;
     }
 
-    return true;
+    int input_count() { return input_count_; }
+    int output_count() { return output_count_; }
+    int size() { return cell_n_stride_ * output_count_ * STRIDE; }
+    int cell_n_group() { return cell_n_stride_ / group_n_stride_; }
+
+private:
+    const int group_n_stride_ = 3;
+    const int block_n_stride_ = 15;
+    const int block_n_pixel_ = block_n_stride_ * STRIDE;
+
+private:
+    int input_count_;
+    int output_count_;
+    int cell_n_stride_;
+};
+
+static void test_conv_fcw() {
+    conv_fcw w(512, 2);
+    assert(w.size() == 1920);
+    assert(w.get_fpga_addr(1, 3) == 1072);
 }
 
-static bool gen_fc_fcw(int input_count, int output_count, const std::vector<u32> &input, std::vector<u32> &output) {
-    if ((int)input.size() < input_count * output_count)
-        return -1;
-
-    int input_n_stride = input.size() / STRIDE;
-    int cell_n_stride = round_up(input_n_stride, 15);
-
-    output.resize(cell_n_stride * STRIDE * output_count);
-
-    auto src = input.begin();
-    auto dst = output.begin();
-
-    for (int i=0; i<output_count; i++) {
-        output.insert(dst, src, src + input_count);
-        src += input_count;
-        dst += cell_n_stride * STRIDE;
+class fc_fcw {
+public:
+    fc_fcw(int input_count, int output_count):
+        input_count_(input_count), output_count_(output_count) {
+        int input_n_stride = input_count_ / STRIDE;
+        cell_n_stride_ = round_up(input_n_stride, block_n_stride_);
     }
 
-    return true;
+    int get_fpga_addr(int cell) { return cell * cell_n_stride_ * STRIDE; }
+    int input_count() { return input_count_; }
+    int output_count() { return output_count_; }
+    int size() { return cell_n_stride_ * output_count_ * STRIDE; }
+
+private:
+    const int block_n_stride_ = 15;
+
+private:
+    int input_count_;
+    int output_count_;
+    int cell_n_stride_;
+};
+
+static void test_fc_fcw() {
+    fc_fcw w(512, 2);
+    assert(w.size() == 1920);
+    assert(w.get_fpga_addr(1) == 960);
+}
+
+class bias {
+public:
+    bias(int input_count): input_count_(input_count) {}
+
+    int get_fpga_addr(int index) { return (index/2)*STRIDE + (index%2); }
+    int size() { return (input_count_/2) * STRIDE; }
+
+private:
+    int input_count_;
+};
+
+static void test_bias() {
+    bias b(8);
+    assert(b.size() == 4*STRIDE);
+    assert(b.get_fpga_addr(5) == 2*STRIDE+1);
+    assert(b.get_fpga_addr(6) == 3*STRIDE+0);
+}
+
+class fc_bias {
+public:
+    fc_bias(int input_count): input_count_(input_count) {}
+
+    int get_fpga_addr(int index) { return index*STRIDE; }
+    int size() { return input_count_ * STRIDE; }
+
+private:
+    int input_count_;
+};
+
+static void test_fc_bias() {
+    fc_bias b(8);
+    assert(b.size() == 8*STRIDE);
+    assert(b.get_fpga_addr(5) == 5*STRIDE);
 }
 
 static void test_3x3() {
@@ -294,18 +305,10 @@ static void test() {
     test_5x5();
     test_7x7();
     test_1x1();
-
-    {
-        std::vector<u32> input(8);
-        std::vector<u32> output;
-        gen_bias(input, output);
-        gen_fcb(input, output);
-    }
-
-    std::vector<u32> input(32*4*15*3, 0);
-    std::vector<u32> output;
-    gen_conv_fcw(512, 2, input, output);
-    write_file("convfcw.bin", output);
+    test_conv_fcw();
+    test_fc_fcw();
+    test_bias();
+    test_fc_bias();
 }
 
 class param_t {
