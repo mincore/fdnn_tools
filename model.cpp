@@ -1,6 +1,6 @@
 /* ===================================================
  * Copyright (C) 2018 chenshuangping All Right Reserved.
- *      Author: mincore@STRIDE3.com
+ *      Author: mincore@163.com
  *    Filename: w.cpp
  *     Created: 2018-04-13 13:46
  * Description:
@@ -40,7 +40,7 @@ struct weight {
     int block_h_convs;
     int block_pad_w;
     int input_convs;
-    int output_convs;
+    int output_count;
 
     int block_convs() { return block_w_convs * block_h_convs; }
     int block_w() { return block_w_convs * conv_dim; }
@@ -53,7 +53,7 @@ struct weight {
     int cell_h() { return cell_h_convs() * conv_dim; }
 
     int conv_size() { return conv_dim * conv_dim; }
-    int size() { return STRIDE * cell_h() * output_convs; }
+    int size() { return STRIDE * cell_h() * output_count; }
 
     int get_fpga_addr(int cell, int conv, int pixel) {
         int n_cell_stride = cell/2;
@@ -71,15 +71,15 @@ struct weight {
         return addr;
     }
 
-    bool gen_fpga_data(const std::vector<u32> &input, std::vector<u32> &output) {
-        if ((int)input.size() < output_convs*input_convs*conv_size())
+    bool gen_weight(const std::vector<u32> &input, std::vector<u32> &output) {
+        if ((int)input.size() < output_count*input_convs*conv_size())
             return false;
 
         output.resize(size());
         memset(&output[0], 0, sizeof(u32)*output.size());
 
         int n = 0;
-        for (int i=0; i<output_convs; i++) {
+        for (int i=0; i<output_count; i++) {
             for (int j=0; j<input_convs; j++) {
                 for (int k=0; k<conv_size(); k++) {
                     output[get_fpga_addr(i, j, k)] = input[n++];
@@ -90,7 +90,7 @@ struct weight {
         return true;
     }
 
-    bool fill_fpga_data(int cell, int conv, const std::vector<u32> &input, std::vector<u32> &output) {
+    bool fill_weight(int cell, int conv, const std::vector<u32> &input, std::vector<u32> &output) {
         if ((int)input.size() != conv_size())
             return false;
 
@@ -104,6 +104,94 @@ struct weight {
         return true;
     }
 };
+
+static bool gen_bias(const std::vector<u32> &input, std::vector<u32> &output) {
+    int h = input.size() / 2;
+    output.resize(h*STRIDE);
+
+    for (int i=0; i<(int)input.size(); i++) {
+        int k = (i/2)*STRIDE + (i%2);
+        output[k] = input[i];
+    }
+
+    return true;
+}
+
+static bool gen_fcb(const std::vector<u32> &input, std::vector<u32> &output) {
+    int h = input.size();
+    output.resize(h*STRIDE);
+
+    for (int i=0; i<(int)input.size(); i++) {
+        int k = i*STRIDE;
+        output[k] = input[i];
+    }
+
+    return true;
+}
+
+static bool gen_conv_fcw(int input_count, int output_count, const std::vector<u32> &input, std::vector<u32> &output) {
+    if ((int)input.size() < input_count * output_count)
+        return -1;
+
+    int group_n_stride = 3;
+    int block_n_stride = 15;
+    int cell_n_stride = (round_up(input_count, 480) / 480 ) * block_n_stride;
+    int cell_n_group = cell_n_stride / group_n_stride;
+
+    output.resize(cell_n_stride * output_count * STRIDE);
+
+    auto fill_group = [&](int cell, int group, const u32* &data, int &count) {
+        int addr = cell * cell_n_stride * STRIDE + (group/2) * group_n_stride * STRIDE;
+
+        if (group%2)
+            addr += HALF_STRIDE;
+
+        for (int i=0; i<group_n_stride && count; i++) {
+            int n = std::min(count, HALF_STRIDE);
+            if (cell == 1 && group == 3) {
+                memset(&output[addr], 0xaa, n*sizeof(u32));
+            }
+            else {
+                memcpy(&output[addr], data, n*sizeof(u32));
+            }
+            addr += STRIDE;
+            count -= n;
+            data += n;
+        }
+    };
+
+    const u32 *data = &input[0];
+
+    for (int cell = 0; cell < output_count; cell++) {
+        int count = input_count;
+        for (int group = 0; group < cell_n_group; group++) {
+            fill_group(cell, group, data, count);
+        }
+    }
+
+    return true;
+}
+
+static bool gen_fc_fcw(int input_count, int output_count, const std::vector<u32> &input, std::vector<u32> &output) {
+    if ((int)input.size() < input_count * output_count)
+        return -1;
+
+    int input_n_stride = input.size() / STRIDE;
+    int cell_n_stride = round_up(input_n_stride, 15);
+
+    output.resize(cell_n_stride * STRIDE * output_count);
+
+    auto src = input.begin();
+    auto dst = output.begin();
+
+    for (int i=0; i<output_count; i++) {
+        output.insert(dst, src, src + input_count);
+        src += input_count;
+        dst += cell_n_stride * STRIDE;
+    }
+
+    return true;
+}
 
 static void test_3x3() {
     weight w(3);
@@ -195,7 +283,7 @@ static bool trans_weight(weight &w, const std::string &file_in, const std::strin
     std::vector<u32> output;
 
     read_file(file_in, input);
-    bool ret = w.gen_fpga_data(input, output);
+    bool ret = w.gen_weight(input, output);
     if (ret)
         write_file(file_out, output);
     return ret;
@@ -206,6 +294,18 @@ static void test() {
     test_5x5();
     test_7x7();
     test_1x1();
+
+    {
+        std::vector<u32> input(8);
+        std::vector<u32> output;
+        gen_bias(input, output);
+        gen_fcb(input, output);
+    }
+
+    std::vector<u32> input(32*4*15*3, 0);
+    std::vector<u32> output;
+    gen_conv_fcw(512, 2, input, output);
+    write_file("convfcw.bin", output);
 }
 
 class param_t {
@@ -239,7 +339,7 @@ public:
         sub->add_option("--output", output_file, "the file to write")->required();
         sub->add_set("--dim", dim, {1,3,5,7}, "the dim of conv")->required();
         sub->add_option("--input_convs", input_convs, "input_convs")->required();
-        sub->add_option("--output_convs", output_convs, "output_convs")->required();
+        sub->add_option("--output_count", output_count, "output_count")->required();
     }
 
     bool run() {
@@ -250,7 +350,7 @@ private:
     bool trans() {
         weight w(dim);
         w.input_convs = input_convs;
-        w.output_convs = output_convs;
+        w.output_count = output_count;
         return trans_weight(w, input_file, output_file);
     }
 
@@ -259,7 +359,7 @@ private:
     std::string output_file;
     int dim;
     int input_convs;
-    int output_convs;
+    int output_count;
 };
 
 class fill_param_t: public param_t {
@@ -270,7 +370,7 @@ public:
         sub->add_option("--output", output_file, "the file to write")->required();
         sub->add_set("--dim", dim, {1,3,5,7}, "the dim of conv")->required();
         sub->add_option("--input_convs", input_convs, "input_convs")->required();
-        sub->add_option("--output_convs", output_convs, "output_convs")->required();
+        sub->add_option("--output_count", output_count, "output_count")->required();
         sub->add_option("--cell", cell, "which cell to fill")->required();
         sub->add_option("--conv", conv, "which conv to fill")->required();
         sub->add_option("--value", value, "fill by value")->required();
@@ -280,12 +380,13 @@ public:
     bool run() {
         weight w(dim);
         w.input_convs = input_convs;
-        w.output_convs = output_convs;
+        w.output_count = output_count;
 
         std::vector<u32> conv_input(w.conv_size(), value);
         std::vector<u32> output;
 
-        printf("dim:%d input_convs:%d output_convs:%d cell:%d conv:%d value:%08x\n", dim, input_convs, output_convs, cell, conv, value);
+        printf("dim:%d input_convs:%d output_count:%d cell:%d conv:%d value:%08x\n",
+                dim, input_convs, output_count, cell, conv, value);
 
         if (with_index) {
             for (size_t i=0; i<conv_input.size(); i++) {
@@ -298,7 +399,7 @@ public:
             memset(&output[0], 0, output.size()*4);
         }
 
-        w.fill_fpga_data(cell, conv, conv_input, output);
+        w.fill_weight(cell, conv, conv_input, output);
         write_file(output_file, output);
 
         return true;
@@ -309,7 +410,7 @@ private:
     std::string output_file;
     int dim;
     int input_convs;
-    int output_convs;
+    int output_count;
     int cell;
     int conv;
     u32 value;

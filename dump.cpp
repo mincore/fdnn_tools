@@ -13,20 +13,22 @@
 
 using namespace kx;
 
-static inline void le_print(char *p, int size) {
+static inline void le_print(const char *p, int size) {
     for (int i=size-1; i>=0; i--)
         printf("%02x", p[i] & 0xff);
 }
 
-static void dump(char *p, int bytes, int stride, int count) {
-    for (int i=0; i<count; i++, p+=bytes) {
+static void dump(const void *data, int size, int bytes, int stride) {
+    const char *p = (const char *)data;
+    size /= bytes;
+    for (int i=0; i<size; i++, p+=bytes) {
         le_print(p, bytes);
         printf(" ");
-        if (i > 0 && (i+1)%stride == 0) {
+        if ((i+1)%stride == 0) {
             printf("\n");
         }
     }
-    if (count % stride != 0)
+    if (size % stride != 0)
         printf("\n");
 }
 
@@ -56,21 +58,12 @@ int main(int argc, char *argv[])
     }
 
     std::vector<char> data;
-    if (read_file(input_file, data, offset * bytes) <= 0) {
+    if (read_file(input_file, data, count * bytes, offset * bytes) <= 0) {
         printf("can not read file: \"%s\"\n", input_file.c_str());
         return -1;
     }
 
-    auto size = data.size() / bytes;
-
-    if (count == 0)
-        count = size;
-
-    if (offset + count >= size) {
-        count = size - offset;
-    }
-
-    dump(&data[0], bytes, stride, count);
+    dump(&data[0], data.size(), bytes, stride);
 
     return 0;
 }

@@ -93,19 +93,24 @@ static size_t read_file(const std::string &filename, void *data, size_t size, of
 }
 
 template<typename T>
-static size_t read_file(const std::string &filename, std::vector<T> &data, off_t offset = 0)
+static size_t read_file(const std::string &filename, std::vector<T> &data, size_t size = 0, off_t offset = 0)
 {
     file file;
     if (!file.open(filename, "r")) {
         return -1;
     }
 
-    size_t size = (file.size() - offset) / sizeof(T);
-    if (size == 0)
-        return 0;
+    if (offset >= file.size())
+        return -1;
+
+    size_t remain =  (file.size() - offset) / sizeof(T);
+
+    if (size == 0 || size > remain)
+        size = remain;
 
     data.resize(size);
-    return file.read(&data[0], data.size()*sizeof(T), offset);
+
+    return file.read(&data[0], data.size()*sizeof(T), offset*sizeof(T));
 }
 
 static size_t write_file(const std::string &filename, const void *data, size_t size, off_t offset = 0)
