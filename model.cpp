@@ -204,6 +204,116 @@ static void test_fc_bias() {
     assert(b.get_fpga_addr(5) == 5*STRIDE);
 }
 
+struct feature_maps {
+    feature_maps(int dim, int img_h1, int img_count1): img_h(img_h1), img_count(img_count1) {
+        switch (dim) {
+        case 1: stride_imgs = 32; break;
+        case 3: stride_imgs = 10; break;
+        case 5: stride_imgs = 4; break;
+        case 7: stride_imgs = 2; break;
+        }
+
+        if ((img_h+2) % dim == 0)
+            img_h += 1;
+        else
+            img_h = round_up(img_h+1, dim);
+    }
+
+    const int round_imgs = 50;
+    int conv_h;
+    int img_h;
+    int img_count;
+    int stride_imgs;
+
+    int round_num() { return round_up(img_count, round_imgs) / round_imgs; }
+    int round_size() { return (round_imgs/stride_imgs) * (STRIDE*img_h); }
+    int size() { return round_num() * round_size(); }
+
+    int cell_h_imgs() { return img_h/conv_h; }
+    int cell_h() { return cell_h_imgs() * img_h; }
+    int cell_size() { return cell_h() * STRIDE; }
+
+    int part_num() { return cell_h_imgs(); }
+    int part_size() { return img_h*conv_h; }
+    int img_size() { return img_h*img_h; }
+    int img_pad() { return (STRIDE - (stride_imgs*conv_h)) / 2; }
+
+    int img_addr(int img, int part) {
+        return (img/stride_imgs)*img_h*STRIDE
+            + (img%stride_imgs)*conv_h
+            + (img%stride_imgs>= (stride_imgs/2) ? img_pad() : 0)
+            + part * img_h * STRIDE;
+    }
+
+    int pixel_addr(int index) {
+        int x = index % img_h;
+        int y = index / img_h;
+        return x * STRIDE + y;
+    }
+
+    bool trans(const std::vector<u32> &input, std::vector<u32> &output) {
+        if ((int)input.size() != img_size() * img_count) {
+            return false;
+        }
+
+        output.resize(size());
+        const u32 *in = &input[0];
+        u32 *out = &output[0];
+
+        printf("img_count: %d\n", img_count);
+        printf("part_num: %d\n", part_num());
+
+        for (int img=0; img<img_count; img++) {
+            for (int part=0; part<part_num(); part++) {
+                in += fill_part(img_addr(img, part), in, out);
+            }
+        }
+
+        return true;
+    }
+
+    int fill_part(int addr, const u32 *in, u32 *out) {
+        for (int i=0; i<part_size(); i++) {
+            out[addr + pixel_addr(i)] = in[i];
+        }
+        return part_size();
+    }
+
+    bool fill_img(int img, const std::vector<u32> &input, std::vector<u32> &output) {
+        if ((int)input.size() != img_size())
+            return false;
+
+        if ((int)input.size() != img_size() * img_count)
+            return false;
+
+        const u32 *in = &input[0];
+        u32 *out = &output[0];
+
+        for (int part=0; part<part_num(); part++) {
+            in += fill_part(img_addr(img, part), in, out);
+        }
+
+        return true;
+    }
+};
+
+static void test_feature_map() {
+    feature_maps fms(3, 12, 54);
+
+    assert(fms.round_num() == 2);
+    assert(fms.img_pad() == 1);
+    assert(fms.cell_h() == 12*4);
+    assert(fms.cell_h_imgs() == 4);
+    assert(fms.cell_size() == 48*STRIDE);
+    assert(fms.size() == 6*12*4*32);
+    assert(fms.img_addr(3, 0) == 3*3);
+    assert(fms.img_addr(3, 2) == fms.img_addr(3, 0) + 12*2*32);
+    assert(fms.img_addr(7, 0) == 7*3+1);
+    assert(fms.img_addr(13, 0) == 12*32 + 3*3);
+    assert(fms.img_addr(17, 0) == 12*32 + 7*3 + 1);
+    assert(fms.img_addr(17, 2) == fms.img_addr(17, 0) + 12*2*32);
+}
+
 static void test_3x3() {
     weight w(3);
     w.input_convs = 64;
@@ -309,6 +419,7 @@ static void test() {
     test_fc_fcw();
     test_bias();
     test_fc_bias();
+    test_feature_map();
 }
 
 class param_t {
@@ -337,7 +448,7 @@ public:
 class trans_param_t: public param_t {
 public:
     trans_param_t(CLI::App &app) {
-        sub = app.add_subcommand("trans", "trans");
+        sub = app.add_subcommand("trans", "trans weight to fpga format");
         sub->add_option("--input", input_file, "the file to read")->required();
         sub->add_option("--output", output_file, "the file to write")->required();
         sub->add_set("--dim", dim, {1,3,5,7}, "the dim of conv")->required();
@@ -363,6 +474,45 @@ private:
     int dim;
     int input_convs;
     int output_count;
+};
+
+class trans_img_param_t: public param_t {
+public:
+    trans_img_param_t(CLI::App &app) {
+        sub = app.add_subcommand("trans-img", "trans img to fpga format");
+        sub->add_option("--input", input_file, "the file to read")->required();
+        sub->add_option("--output", output_file, "the file to write")->required();
+        sub->add_set("--dim", dim, {1,3,5,7}, "the dim of conv")->required();
+        sub->add_option("--img_h", img_h, "img height")->required();
+        sub->add_option("--img_count", img_count, "img_count")->required();
+    }
+
+    bool run() {
+        return trans();
+    }
+
+private:
+    bool trans() {
+        feature_maps fms(3, img_h, img_count);
+
+        std::vector<u32> input;
+        std::vector<u32> output;
+
+        read_file(input_file, input);
+
+        bool ret = fms.trans(input, output);
+        if (ret)
+            write_file(output_file, output);
+
+        return ret;
+    }
+
+private:
+    std::string input_file;
+    std::string output_file;
+    int dim;
+    int img_h;
+    int img_count;
 };
 
 class fill_param_t: public param_t {
@@ -427,7 +577,8 @@ int main(int argc, char *argv[])
     std::vector<std::shared_ptr<param_t> > params = {
         std::make_shared<test_param_t>(app),
         std::make_shared<trans_param_t>(app),
-        std::make_shared<fill_param_t>(app)
+        std::make_shared<trans_img_param_t>(app),
+        std::make_shared<fill_param_t>(app),
     };
 
     try {
