@@ -207,10 +207,10 @@ static void test_fc_bias() {
 struct feature_maps {
     feature_maps(int dim, int img_h1, int img_count1): conv_h(dim), img_origin_h(img_h1), img_count(img_count1) {
         switch (dim) {
-        case 1: stride_imgs = 32; break;
-        case 3: stride_imgs = 10; break;
-        case 5: stride_imgs = 4; break;
-        case 7: stride_imgs = 2; break;
+        case 1: stride_imgs = 32; round_imgs = 160; break;
+        case 3: stride_imgs = 10; round_imgs = 50; break;
+        case 5: stride_imgs = 4; round_imgs = 20; break;
+        case 7: stride_imgs = 2; round_imgs = 10; break;
         }
 
         if (dim >= 3)
@@ -221,7 +221,7 @@ struct feature_maps {
         return (k - 1)/2;
     }
 
-    const int round_imgs = 50;
+    int round_imgs;
     int conv_h;
     int img_origin_h;
     int img_count;
