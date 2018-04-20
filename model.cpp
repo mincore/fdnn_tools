@@ -71,7 +71,7 @@ struct weight {
         return addr;
     }
 
-    bool gen_weight(const std::vector<u32> &input, std::vector<u32> &output) {
+    bool trans(const std::vector<u32> &input, std::vector<u32> &output) {
         if ((int)input.size() < output_count*input_convs*conv_size())
             return false;
 
@@ -205,7 +205,7 @@ static void test_fc_bias() {
 }
 
 struct feature_maps {
-    feature_maps(int dim, int img_h1, int img_count1): img_h(img_h1), img_count(img_count1) {
+    feature_maps(int dim, int img_h1, int img_count1): conv_h(dim), img_origin_h(img_h1), img_count(img_count1) {
         switch (dim) {
         case 1: stride_imgs = 32; break;
         case 3: stride_imgs = 10; break;
@@ -213,35 +213,37 @@ struct feature_maps {
         case 7: stride_imgs = 2; break;
         }
 
-        if ((img_h+2) % dim == 0)
-            img_h += 1;
-        else
-            img_h = round_up(img_h+1, dim);
+        if (dim >= 3)
+            img_h = round_up(img_origin_h + tensor_pad(dim), dim);
+    }
+
+    int tensor_pad(int k) {
+        return (k - 1)/2;
     }
 
     const int round_imgs = 50;
     int conv_h;
-    int img_h;
+    int img_origin_h;
     int img_count;
     int stride_imgs;
+    int img_h;
+
+    int img_pad() { return (img_h - img_origin_h) / 2; }
 
     int round_num() { return round_up(img_count, round_imgs) / round_imgs; }
-    int round_size() { return (round_imgs/stride_imgs) * (STRIDE*img_h); }
+    int round_h_imgs() { return round_imgs/stride_imgs; }
+    int round_size() { return  round_h_imgs() * part_num() * img_h * STRIDE; }
     int size() { return round_num() * round_size(); }
 
-    int cell_h_imgs() { return img_h/conv_h; }
-    int cell_h() { return cell_h_imgs() * img_h; }
-    int cell_size() { return cell_h() * STRIDE; }
-
-    int part_num() { return cell_h_imgs(); }
+    int part_num() { return img_h/conv_h; }
     int part_size() { return img_h*conv_h; }
-    int img_size() { return img_h*img_h; }
-    int img_pad() { return (STRIDE - (stride_imgs*conv_h)) / 2; }
+    int map_size() { return img_h*img_h; }
+    int map_pad() { return (STRIDE - (stride_imgs*conv_h)) / 2; }
 
     int img_addr(int img, int part) {
         return (img/stride_imgs)*img_h*STRIDE
             + (img%stride_imgs)*conv_h
-            + (img%stride_imgs>= (stride_imgs/2) ? img_pad() : 0)
+            + (img%stride_imgs>= (stride_imgs/2) ? map_pad() : 0)
             + part * img_h * STRIDE;
     }
 
@@ -251,21 +253,38 @@ struct feature_maps {
         return x * STRIDE + y;
     }
 
-    bool trans(const std::vector<u32> &input, std::vector<u32> &output) {
-        if ((int)input.size() != img_size() * img_count) {
+    void pad_input(int pad, const std::vector<u32> &src, std::vector<u32> &dst) {
+        dst = std::vector<u32>(img_h*img_h*img_count, 0);
+
+        const u32 *psrc = &src[0];
+        u32 *pdst = &dst[0] + 2*img_h;
+
+        for (int i=0; i<img_count * img_origin_h; i++) {
+            memcpy(pdst, psrc, img_origin_h*4);
+            pdst += (i > 0 && (i%img_origin_h == 0)) ? 4*img_h : img_h;
+            psrc += img_origin_h;
+        }
+    }
+
+    bool trans(const std::vector<u32> &input1, std::vector<u32> &output) {
+        if ((int)input1.size() != img_origin_h * img_origin_h * img_count) {
+            printf("error, input size:%zd, img_origin_h:%d, img_count:%d\n", input1.size(), img_origin_h, img_count);
             return false;
         }
 
+        int pad = img_pad();
+        std::vector<u32> input;
+        pad_input(pad, input1, input);
+
         output.resize(size());
+
         const u32 *in = &input[0];
         u32 *out = &output[0];
 
-        printf("img_count: %d\n", img_count);
-        printf("part_num: %d\n", part_num());
-
         for (int img=0; img<img_count; img++) {
             for (int part=0; part<part_num(); part++) {
-                in += fill_part(img_addr(img, part), in, out);
+                int addr = img_addr(img, part);
+                in += fill_part(addr, in, out);
             }
         }
 
@@ -274,16 +293,17 @@ struct feature_maps {
 
     int fill_part(int addr, const u32 *in, u32 *out) {
         for (int i=0; i<part_size(); i++) {
-            out[addr + pixel_addr(i)] = in[i];
+            int subaddr = pixel_addr(i);
+            out[addr + subaddr] = in[i];
         }
         return part_size();
     }
 
     bool fill_img(int img, const std::vector<u32> &input, std::vector<u32> &output) {
-        if ((int)input.size() != img_size())
+        if ((int)input.size() != map_size())
             return false;
 
-        if ((int)input.size() != img_size() * img_count)
+        if ((int)input.size() != map_size() * img_count)
             return false;
 
         const u32 *in = &input[0];
@@ -301,10 +321,7 @@ static void test_feature_map() {
     feature_maps fms(3, 12, 54);
 
     assert(fms.round_num() == 2);
-    assert(fms.img_pad() == 1);
-    assert(fms.cell_h() == 12*4);
-    assert(fms.cell_h_imgs() == 4);
-    assert(fms.cell_size() == 48*STRIDE);
+    assert(fms.map_pad() == 1);
     assert(fms.size() == 6*12*4*32);
     assert(fms.img_addr(3, 0) == 3*3);
     assert(fms.img_addr(3, 2) == fms.img_addr(3, 0) + 12*2*32);
@@ -404,7 +421,7 @@ static bool trans_weight(weight &w, const std::string &file_in, const std::strin
     std::vector<u32> output;
 
     read_file(file_in, input);
-    bool ret = w.gen_weight(input, output);
+    bool ret = w.trans(input, output);
     if (ret)
         write_file(file_out, output);
     return ret;
