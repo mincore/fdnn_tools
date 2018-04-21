@@ -25,64 +25,77 @@ static inline int round_up(int x, int base) {
     return base * (x/base + (!!x%base));
 }
 
+template<class T>
+bool format_to_fpga(T &t, std::vector<u32> &output, const std::string &input_file, const std::string &output_file = "")
+{
+    std::vector<u32> input;
+    if (!read_file(input_file, input))
+        return false;
+
+    bool ret = t.format(input, output);
+    if (ret && !output_file.empty())
+        write_file(output_file, output);
+
+    return ret;
+}
+
 struct weight {
-    weight(int dim): conv_dim(dim) {
-        switch (dim) {
-        case 1: block_w_convs = 16; block_h_convs = 10; block_pad_w = 0; break;
-        case 3: block_w_convs =  5; block_h_convs = 10; block_pad_w = 1; break;
-        case 5: block_w_convs =  2; block_h_convs = 10; block_pad_w = 6; break;
-        case 7: block_w_convs =  2; block_h_convs =  5; block_pad_w = 2; break;
+    weight(int dim, int inputs, int outputs): dim_(dim), inputs_(inputs), outputs_(outputs) {
+        switch (dim_) {
+        case 1: block_w_convs_ = 16; block_h_convs_ = 10; block_pad_w_ = 0; break;
+        case 3: block_w_convs_ =  5; block_h_convs_ = 10; block_pad_w_ = 1; break;
+        case 5: block_w_convs_ =  2; block_h_convs_ = 10; block_pad_w_ = 6; break;
+        case 7: block_w_convs_ =  2; block_h_convs_ =  5; block_pad_w_ = 2; break;
         }
     }
 
-    int conv_dim;
-    int block_w_convs;
-    int block_h_convs;
-    int block_pad_w;
-    int input_convs;
-    int output_count;
+    int dim_;
+    int block_w_convs_;
+    int block_h_convs_;
+    int block_pad_w_;
+    int inputs_;
+    int outputs_;
 
-    int block_convs() { return block_w_convs * block_h_convs; }
-    int block_w() { return block_w_convs * conv_dim; }
-    int block_h() { return block_h_convs * conv_dim; }
+    int block_convs() { return block_w_convs_ * block_h_convs_; }
+    int block_w() { return block_w_convs_ * dim_; }
+    int block_h() { return block_h_convs_ * dim_; }
 
-    int cell_w_convs() { return block_w_convs; }
-    int cell_h_convs() { return round_up(input_convs, block_convs()) / block_w_convs; }
+    int cell_w_convs() { return block_w_convs_; }
+    int cell_h_convs() { return round_up(inputs_, block_convs()) / block_w_convs_; }
     int cell_convs() { return cell_w_convs() * cell_h_convs(); }
-    int cell_w() { return cell_w_convs() * conv_dim; }
-    int cell_h() { return cell_h_convs() * conv_dim; }
+    int cell_w() { return cell_w_convs() * dim_; }
+    int cell_h() { return cell_h_convs() * dim_; }
 
-    int conv_size() { return conv_dim * conv_dim; }
-    int size() { return STRIDE * cell_h() * output_count; }
+    int conv_size() { return dim_ * dim_; }
+    int size() { return STRIDE * cell_h() * outputs_; }
 
-    int get_fpga_addr(int cell, int conv, int pixel) {
+    int get_pixel_addr(int cell, int conv, int pixel) {
         int n_cell_stride = cell/2;
-        int n_conv_stride = conv / block_w_convs;
+        int n_conv_stride = conv / block_w_convs_;
 
-        int n_pixel_stride = pixel % conv_dim;
+        int n_pixel_stride = pixel % dim_;
         n_pixel_stride += n_cell_stride * cell_h();
-        n_pixel_stride += n_conv_stride * conv_dim;
+        n_pixel_stride += n_conv_stride * dim_;
 
         int addr = n_pixel_stride * STRIDE;
         addr += (cell % 2) ? HALF_STRIDE : 0;
-        addr += (conv % block_w_convs) * conv_dim;
-        addr += pixel / conv_dim;
+        addr += (conv % block_w_convs_) * dim_;
+        addr += pixel / dim_;
 
         return addr;
     }
 
-    bool trans(const std::vector<u32> &input, std::vector<u32> &output) {
-        if ((int)input.size() < output_count*input_convs*conv_size())
+    bool format(const std::vector<u32> &input, std::vector<u32> &output) {
+        if ((int)input.size() < outputs_*inputs_*conv_size())
             return false;
 
-        output.resize(size());
-        memset(&output[0], 0, sizeof(u32)*output.size());
+        output = std::vector<u32>(size(), 0);
 
         int n = 0;
-        for (int i=0; i<output_count; i++) {
-            for (int j=0; j<input_convs; j++) {
+        for (int i=0; i<outputs_; i++) {
+            for (int j=0; j<inputs_; j++) {
                 for (int k=0; k<conv_size(); k++) {
-                    output[get_fpga_addr(i, j, k)] = input[n++];
+                    output[get_pixel_addr(i, j, k)] = input[n++];
                 }
             }
         }
@@ -98,7 +111,7 @@ struct weight {
             return false;
 
         for (int k=0; k<conv_size(); k++) {
-            output[get_fpga_addr(cell, conv, k)] = input[k];
+            output[get_pixel_addr(cell, conv, k)] = input[k];
         }
 
         return true;
@@ -107,22 +120,46 @@ struct weight {
 
 class conv_fcw {
 public:
-    conv_fcw(int input_count, int output_count):
-        input_count_(input_count), output_count_(output_count) {
-        cell_n_stride_ = (round_up(input_count, block_n_pixel_) / block_n_pixel_) * block_n_stride_;
+    conv_fcw(int inputs, int outputs): inputs_(inputs), outputs_(outputs) {
+        cell_n_stride_ = (round_up(inputs_, block_n_pixel_) / block_n_pixel_) * block_n_stride_;
+        cell_n_groups_ = cell_n_stride_ / group_n_stride_ * 2;
     }
 
-    int get_fpga_addr(int cell, int group) {
+    int get_group_addr(int cell, int group) {
         int addr = cell * cell_n_stride_ * STRIDE + (group/2) * group_n_stride_ * STRIDE;
         if (group%2)
             addr += HALF_STRIDE;
         return addr;
     }
 
-    int input_count() { return input_count_; }
-    int output_count() { return output_count_; }
-    int size() { return cell_n_stride_ * output_count_ * STRIDE; }
-    int cell_n_group() { return cell_n_stride_ / group_n_stride_; }
+    int size() { return cell_n_stride_ * outputs_ * STRIDE; }
+    int group_size() { return group_n_stride_*HALF_STRIDE; }
+
+    bool format(const std::vector<u32> &input, std::vector<u32> &output) {
+        if ((int)input.size() < outputs_*inputs_)
+            return false;
+
+        output = std::vector<u32>(size(), 0);
+        const u32 *in = &input[0];
+        u32 *out = &output[0];
+
+        for (int i=0; i<outputs_; i++) {
+            for (int j=0; j<cell_n_groups_; j++) {
+                out = &output[get_group_addr(i, j)];
+                in += fill_group(in, out);
+            }
+        }
+
+        return true;
+    }
+
+private:
+    int fill_group(const u32 *in, u32 *out) {
+        for (int k=0; k<group_n_stride_; k++) {
+            memcpy(out, in, HALF_STRIDE*4);
+        }
+        return group_size();
+    }
 
 private:
     const int group_n_stride_ = 3;
@@ -130,78 +167,123 @@ private:
     const int block_n_pixel_ = block_n_stride_ * STRIDE;
 
 private:
-    int input_count_;
-    int output_count_;
+    int inputs_;
+    int outputs_;
     int cell_n_stride_;
+    int cell_n_groups_;
 };
 
 static void test_conv_fcw() {
     conv_fcw w(512, 2);
     assert(w.size() == 1920);
-    assert(w.get_fpga_addr(1, 3) == 1072);
+    assert(w.get_group_addr(1, 3) == 1072);
 }
 
 class fc_fcw {
 public:
-    fc_fcw(int input_count, int output_count):
-        input_count_(input_count), output_count_(output_count) {
-        int input_n_stride = input_count_ / STRIDE;
-        cell_n_stride_ = round_up(input_n_stride, block_n_stride_);
+    fc_fcw(int inputs, int outputs): inputs_(inputs), outputs_(outputs) {
+        cell_n_stride_ = round_up(inputs_ / STRIDE, block_n_stride_);
     }
 
-    int get_fpga_addr(int cell) { return cell * cell_n_stride_ * STRIDE; }
-    int input_count() { return input_count_; }
-    int output_count() { return output_count_; }
-    int size() { return cell_n_stride_ * output_count_ * STRIDE; }
+    int get_cell_addr(int cell) { return cell * cell_n_stride_ * STRIDE; }
+    int size() { return cell_n_stride_ * outputs_ * STRIDE; }
+    int cell_size() { return block_n_stride_*HALF_STRIDE; }
+
+    bool format(const std::vector<u32> &input, std::vector<u32> &output) {
+        if ((int)input.size() < outputs_*inputs_)
+            return false;
+
+        output = std::vector<u32>(size(), 0);
+        const u32 *in = &input[0];
+
+        for (int i=0; i<outputs_; i++) {
+            u32 *out = &output[get_cell_addr(i)];
+            in += fill_cell(in, out);
+        }
+
+        return true;
+    }
+
+private:
+    int fill_cell(const u32 *in, u32 *out) {
+        memcpy(out, in, inputs_);
+        return cell_size();
+    }
 
 private:
     const int block_n_stride_ = 15;
 
 private:
-    int input_count_;
-    int output_count_;
+    int inputs_;
+    int outputs_;
     int cell_n_stride_;
 };
 
 static void test_fc_fcw() {
     fc_fcw w(512, 2);
     assert(w.size() == 1920);
-    assert(w.get_fpga_addr(1) == 960);
+    assert(w.get_cell_addr(1) == 960);
 }
 
 class bias {
 public:
-    bias(int input_count): input_count_(input_count) {}
+    bias(int inputs): inputs_(inputs) {}
 
-    int get_fpga_addr(int index) { return (index/2)*STRIDE + (index%2); }
-    int size() { return (input_count_/2) * STRIDE; }
+    int get_bias_addr(int index) { return (index/2)*STRIDE + (index%2); }
+    int size() { return (inputs_/2) * STRIDE; }
+
+    bool format(const std::vector<u32> &input, std::vector<u32> &output) {
+        if ((int)input.size() < inputs_)
+            return false;
+
+        output = std::vector<u32>(size(), 0);
+
+        for (int i=0; i<inputs_; i++) {
+            output[get_bias_addr(i)] = input[i];
+        }
+
+        return true;
+    }
 
 private:
-    int input_count_;
+    int inputs_;
 };
 
 static void test_bias() {
     bias b(8);
     assert(b.size() == 4*STRIDE);
-    assert(b.get_fpga_addr(5) == 2*STRIDE+1);
-    assert(b.get_fpga_addr(6) == 3*STRIDE+0);
+    assert(b.get_bias_addr(5) == 2*STRIDE+1);
+    assert(b.get_bias_addr(6) == 3*STRIDE+0);
 }
 
 class fc_bias {
 public:
-    fc_bias(int input_count): input_count_(input_count) {}
+    fc_bias(int inputs): inputs_(inputs) {}
 
-    int get_fpga_addr(int index) { return index*STRIDE; }
-    int size() { return input_count_ * STRIDE; }
+    int get_bias_addr(int index) { return index*STRIDE; }
+    int size() { return inputs_ * STRIDE; }
+
+    bool format(const std::vector<u32> &input, std::vector<u32> &output) {
+        if ((int)input.size() < inputs_)
+            return false;
+
+        output = std::vector<u32>(size(), 0);
+
+        for (int i=0; i<inputs_; i++) {
+            output[get_bias_addr(i)] = input[i];
+        }
+
+        return true;
+    }
 
 private:
-    int input_count_;
+    int inputs_;
 };
 
 static void test_fc_bias() {
     fc_bias b(8);
     assert(b.size() == 8*STRIDE);
-    assert(b.get_fpga_addr(5) == 5*STRIDE);
+    assert(b.get_bias_addr(5) == 5*STRIDE);
 }
 
 struct feature_maps {
@@ -270,7 +352,7 @@ struct feature_maps {
         }
     }
 
-    bool trans(const std::vector<u32> &input1, std::vector<u32> &output) {
+    bool format(const std::vector<u32> &input1, std::vector<u32> &output) {
         if ((int)input1.size() != img_origin_h * img_origin_h * img_count) {
             printf("error, input size:%zd, img_origin_h:%d, img_count:%d\n", input1.size(), img_origin_h, img_count);
             return false;
@@ -336,10 +418,9 @@ static void test_feature_map() {
 }
 
 static void test_3x3() {
-    weight w(3);
-    w.input_convs = 64;
+    weight w(3, 64, 3);
 
-    assert(w.block_pad_w + w.block_w() == HALF_STRIDE);
+    assert(w.block_pad_w_ + w.block_w() == HALF_STRIDE);
     assert(w.block_convs() == 50);
     assert(w.cell_w_convs() == 5);
     assert(w.cell_h_convs() == 20);
@@ -349,18 +430,17 @@ static void test_3x3() {
 
     int base = 2*10*3*32 + 1*3*32 + 16 + 3;
 
-    assert(w.get_fpga_addr(3, 6, 0) == base);
-    assert(w.get_fpga_addr(3, 6, 3) == base + 32*0 + 1);
-    assert(w.get_fpga_addr(3, 6, 4) == base + 32*1 + 1);
-    assert(w.get_fpga_addr(3, 6, 5) == base + 32*2 + 1);
-    assert(w.get_fpga_addr(3, 6, 8) == base + 32*2 + 2);
+    assert(w.get_pixel_addr(3, 6, 0) == base);
+    assert(w.get_pixel_addr(3, 6, 3) == base + 32*0 + 1);
+    assert(w.get_pixel_addr(3, 6, 4) == base + 32*1 + 1);
+    assert(w.get_pixel_addr(3, 6, 5) == base + 32*2 + 1);
+    assert(w.get_pixel_addr(3, 6, 8) == base + 32*2 + 2);
 }
 
 static void test_5x5() {
-    weight w(5);
-    w.input_convs = 64;
+    weight w(5, 64, 3);
 
-    assert(w.block_pad_w + w.block_w() == HALF_STRIDE);
+    assert(w.block_pad_w_ + w.block_w() == HALF_STRIDE);
     assert(w.block_convs() == 20);
     assert(w.cell_w_convs() == 2);
     assert(w.cell_h_convs() == 4*10);
@@ -370,18 +450,17 @@ static void test_5x5() {
 
     int base = 4*10*5*32 + 2*5*32 + 16 + 5;
 
-    assert(w.get_fpga_addr(3, 5, 0) == base);
-    assert(w.get_fpga_addr(3, 5, 3) == base + 32*3 + 0);
-    assert(w.get_fpga_addr(3, 5, 4) == base + 32*4 + 0);
-    assert(w.get_fpga_addr(3, 5, 5) == base + 32*0 + 1);
-    assert(w.get_fpga_addr(3, 5, 8) == base + 32*3 + 1);
+    assert(w.get_pixel_addr(3, 5, 0) == base);
+    assert(w.get_pixel_addr(3, 5, 3) == base + 32*3 + 0);
+    assert(w.get_pixel_addr(3, 5, 4) == base + 32*4 + 0);
+    assert(w.get_pixel_addr(3, 5, 5) == base + 32*0 + 1);
+    assert(w.get_pixel_addr(3, 5, 8) == base + 32*3 + 1);
 }
 
 static void test_7x7() {
-    weight w(7);
-    w.input_convs = 64;
+    weight w(7, 64, 3);
 
-    assert(w.block_pad_w + w.block_w() == HALF_STRIDE);
+    assert(w.block_pad_w_ + w.block_w() == HALF_STRIDE);
     assert(w.block_convs() == 10);
     assert(w.cell_w_convs() == 2);
     assert(w.cell_h_convs() == 7*5);
@@ -391,18 +470,17 @@ static void test_7x7() {
 
     int base = 7*5*7*32 + 2*7*32 + 16 + 7;
 
-    assert(w.get_fpga_addr(3, 5, 0) == base);
-    assert(w.get_fpga_addr(3, 5, 3) == base + 32*3 + 0);
-    assert(w.get_fpga_addr(3, 5, 4) == base + 32*4 + 0);
-    assert(w.get_fpga_addr(3, 5, 5) == base + 32*5 + 0);
-    assert(w.get_fpga_addr(3, 5, 8) == base + 32*1 + 1);
+    assert(w.get_pixel_addr(3, 5, 0) == base);
+    assert(w.get_pixel_addr(3, 5, 3) == base + 32*3 + 0);
+    assert(w.get_pixel_addr(3, 5, 4) == base + 32*4 + 0);
+    assert(w.get_pixel_addr(3, 5, 5) == base + 32*5 + 0);
+    assert(w.get_pixel_addr(3, 5, 8) == base + 32*1 + 1);
 }
 
 static void test_1x1() {
-    weight w(1);
-    w.input_convs = 256;
+    weight w(1, 256, 3);
 
-    assert(w.block_pad_w + w.block_w() == HALF_STRIDE);
+    assert(w.block_pad_w_ + w.block_w() == HALF_STRIDE);
     assert(w.block_convs() == 160);
     assert(w.cell_w_convs() == 16);
     assert(w.cell_h_convs() == 20);
@@ -412,35 +490,11 @@ static void test_1x1() {
 
     int base = 20*1*32 + 16;
 
-    assert(w.get_fpga_addr(3, 0, 0) == base);
-    assert(w.get_fpga_addr(3, 3, 0) == base + 32*0 + 3);
-    assert(w.get_fpga_addr(3, 4, 0) == base + 32*0 + 4);
-    assert(w.get_fpga_addr(3, 17, 0) == base + 32*1 + 1);
-    assert(w.get_fpga_addr(3, 18, 0) == base + 32*1 + 2);
-}
-
-static bool trans_weight(weight &w, const std::string &file_in, const std::string &file_out)
-{
-    std::vector<u32> input;
-    std::vector<u32> output;
-
-    read_file(file_in, input);
-    bool ret = w.trans(input, output);
-    if (ret)
-        write_file(file_out, output);
-    return ret;
-}
-
-static void test() {
-    test_3x3();
-    test_5x5();
-    test_7x7();
-    test_1x1();
-    test_conv_fcw();
-    test_fc_fcw();
-    test_bias();
-    test_fc_bias();
-    test_feature_map();
+    assert(w.get_pixel_addr(3, 0, 0) == base);
+    assert(w.get_pixel_addr(3, 3, 0) == base + 32*0 + 3);
+    assert(w.get_pixel_addr(3, 4, 0) == base + 32*0 + 4);
+    assert(w.get_pixel_addr(3, 17, 0) == base + 32*1 + 1);
+    assert(w.get_pixel_addr(3, 18, 0) == base + 32*1 + 2);
 }
 
 class param_t {
@@ -461,46 +515,145 @@ public:
     }
 
     bool run() {
-        test();
+        printf("testing 3x3\n");
+        test_3x3();
+        printf("testing 5x5\n");
+        test_5x5();
+        printf("testing 7x7\n");
+        test_7x7();
+        printf("testing 1x1\n");
+        test_1x1();
+        printf("testing conv_fcw\n");
+        test_conv_fcw();
+        printf("testing fc_fcw\n");
+        test_fc_fcw();
+        printf("testing bias\n");
+        test_bias();
+        printf("testing fc_bias\n");
+        test_fc_bias();
+        printf("testing feature_map\n");
+        test_feature_map();
         return true;
     }
 };
 
-class trans_param_t: public param_t {
+class format_weight_param_t: public param_t {
 public:
-    trans_param_t(CLI::App &app) {
-        sub = app.add_subcommand("trans", "trans weight to fpga format");
-        sub->add_option("--input", input_file, "the file to read")->required();
-        sub->add_option("--output", output_file, "the file to write")->required();
-        sub->add_set("--dim", dim, {1,3,5,7}, "the dim of conv")->required();
-        sub->add_option("--input_convs", input_convs, "input_convs")->required();
-        sub->add_option("--output_count", output_count, "output_count")->required();
+    format_weight_param_t(CLI::App &app) {
+        sub = app.add_subcommand("format-weight", "format weight to fpga format");
+        sub->add_option("--input", input_file_, "the file to read")->required();
+        sub->add_option("--output", output_file_, "the file to write")->required();
+        sub->add_set("--dim", dim_, {1,3,5,7}, "the dim of conv")->required();
+        sub->add_option("--inputs", inputs_, "input count")->required();
+        sub->add_option("--outputs", outputs_, "output count")->required();
     }
 
     bool run() {
-        return trans();
+        weight w(dim_, inputs_, outputs_);
+        std::vector<u32> output;
+        return format_to_fpga(w, output, input_file_, output_file_);
     }
 
 private:
-    bool trans() {
-        weight w(dim);
-        w.input_convs = input_convs;
-        w.output_count = output_count;
-        return trans_weight(w, input_file, output_file);
-    }
-
-private:
-    std::string input_file;
-    std::string output_file;
-    int dim;
-    int input_convs;
-    int output_count;
+    std::string input_file_;
+    std::string output_file_;
+    int dim_;
+    int inputs_;
+    int outputs_;
 };
 
-class trans_img_param_t: public param_t {
+class format_convfcw_param_t: public param_t {
 public:
-    trans_img_param_t(CLI::App &app) {
-        sub = app.add_subcommand("trans-img", "trans img to fpga format");
+    format_convfcw_param_t(CLI::App &app) {
+        sub = app.add_subcommand("format-convfcw", "format conv_fc weight to fpga format");
+        sub->add_option("--input", input_file_, "the file to read")->required();
+        sub->add_option("--output", output_file_, "the file to write")->required();
+        sub->add_option("--inputs", inputs_, "input count")->required();
+        sub->add_option("--outputs", outputs_, "output count")->required();
+    }
+
+    bool run() {
+        conv_fcw w(inputs_, outputs_);
+        std::vector<u32> output;
+        return format_to_fpga(w, output, input_file_, output_file_);
+    }
+
+private:
+    std::string input_file_;
+    std::string output_file_;
+    int inputs_;
+    int outputs_;
+};
+
+class format_fcfcw_param_t: public param_t {
+public:
+    format_fcfcw_param_t(CLI::App &app) {
+        sub = app.add_subcommand("format-fcfcw", "format fc_fc weight to fpga format");
+        sub->add_option("--input", input_file_, "the file to read")->required();
+        sub->add_option("--output", output_file_, "the file to write")->required();
+        sub->add_option("--inputs", inputs_, "input count")->required();
+        sub->add_option("--outputs", outputs_, "output count")->required();
+    }
+
+    bool run() {
+        fc_fcw w(inputs_, outputs_);
+        std::vector<u32> output;
+        return format_to_fpga(w, output, input_file_, output_file_);
+    }
+
+private:
+    std::string input_file_;
+    std::string output_file_;
+    int inputs_;
+    int outputs_;
+};
+
+class format_bias_param_t: public param_t {
+public:
+    format_bias_param_t(CLI::App &app) {
+        sub = app.add_subcommand("format-bias", "format bias to fpga format");
+        sub->add_option("--input", input_file_, "the file to read")->required();
+        sub->add_option("--output", output_file_, "the file to write")->required();
+        sub->add_option("--inputs", inputs_, "input count")->required();
+    }
+
+    bool run() {
+        bias b(inputs_);
+        std::vector<u32> output;
+        return format_to_fpga(b, output, input_file_, output_file_);
+    }
+
+private:
+    std::string input_file_;
+    std::string output_file_;
+    int inputs_;
+};
+
+class format_fcbias_param_t: public param_t {
+public:
+    format_fcbias_param_t(CLI::App &app) {
+        sub = app.add_subcommand("format-fcbias", "format fcbias to fpga format");
+        sub->add_option("--input", input_file_, "the file to read")->required();
+        sub->add_option("--output", output_file_, "the file to write")->required();
+        sub->add_option("--inputs", inputs_, "input count")->required();
+    }
+
+    bool run() {
+        fc_bias b(inputs_);
+        std::vector<u32> output;
+        return format_to_fpga(b, output, input_file_, output_file_);
+    }
+
+private:
+    std::string input_file_;
+    std::string output_file_;
+    int inputs_;
+};
+
+class format_img_param_t: public param_t {
+public:
+    format_img_param_t(CLI::App &app) {
+        sub = app.add_subcommand("format-img", "format img to fpga format");
         sub->add_option("--input", input_file, "the file to read")->required();
         sub->add_option("--output", output_file, "the file to write")->required();
         sub->add_set("--dim", dim, {1,3,5,7}, "the dim of conv")->required();
@@ -509,23 +662,9 @@ public:
     }
 
     bool run() {
-        return trans();
-    }
-
-private:
-    bool trans() {
         feature_maps fms(3, img_h, img_count);
-
-        std::vector<u32> input;
         std::vector<u32> output;
-
-        read_file(input_file, input);
-
-        bool ret = fms.trans(input, output);
-        if (ret)
-            write_file(output_file, output);
-
-        return ret;
+        return format_to_fpga(fms, output, input_file, output_file);
     }
 
 private:
@@ -536,15 +675,15 @@ private:
     int img_count;
 };
 
-class fill_param_t: public param_t {
+class fill_conv_param_t: public param_t {
 public:
-    fill_param_t(CLI::App &app) {
-        sub = app.add_subcommand("fill", "fill a conv with specified value");
+    fill_conv_param_t(CLI::App &app) {
+        sub = app.add_subcommand("fill-conv", "fill a conv with specified value");
         sub->add_option("--input", input_file, "the file to read");
         sub->add_option("--output", output_file, "the file to write")->required();
         sub->add_set("--dim", dim, {1,3,5,7}, "the dim of conv")->required();
-        sub->add_option("--input_convs", input_convs, "input_convs")->required();
-        sub->add_option("--output_count", output_count, "output_count")->required();
+        sub->add_option("--inputs_", inputs_, "inputs_")->required();
+        sub->add_option("--outputs_", outputs_, "outputs_")->required();
         sub->add_option("--cell", cell, "which cell to fill")->required();
         sub->add_option("--conv", conv, "which conv to fill")->required();
         sub->add_option("--value", value, "fill by value")->required();
@@ -552,15 +691,13 @@ public:
     }
 
     bool run() {
-        weight w(dim);
-        w.input_convs = input_convs;
-        w.output_count = output_count;
+        weight w(dim, inputs_, outputs_);
 
         std::vector<u32> conv_input(w.conv_size(), value);
         std::vector<u32> output;
 
-        printf("dim:%d input_convs:%d output_count:%d cell:%d conv:%d value:%08x\n",
-                dim, input_convs, output_count, cell, conv, value);
+        printf("dim:%d inputs_:%d outputs_:%d cell:%d conv:%d value:%08x\n",
+                dim, inputs_, outputs_, cell, conv, value);
 
         if (with_index) {
             for (size_t i=0; i<conv_input.size(); i++) {
@@ -583,8 +720,8 @@ private:
     std::string input_file;
     std::string output_file;
     int dim;
-    int input_convs;
-    int output_count;
+    int inputs_;
+    int outputs_;
     int cell;
     int conv;
     u32 value;
@@ -597,9 +734,13 @@ int main(int argc, char *argv[])
 
     std::vector<std::shared_ptr<param_t> > params = {
         std::make_shared<test_param_t>(app),
-        std::make_shared<trans_param_t>(app),
-        std::make_shared<trans_img_param_t>(app),
-        std::make_shared<fill_param_t>(app),
+        std::make_shared<format_weight_param_t>(app),
+        std::make_shared<format_convfcw_param_t>(app),
+        std::make_shared<format_fcfcw_param_t>(app),
+        std::make_shared<format_bias_param_t>(app),
+        std::make_shared<format_fcbias_param_t>(app),
+        std::make_shared<format_img_param_t>(app),
+        std::make_shared<fill_conv_param_t>(app),
     };
 
     try {
