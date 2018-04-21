@@ -213,8 +213,12 @@ struct feature_maps {
         case 7: stride_imgs = 2; round_imgs = 10; break;
         }
 
-        if (dim >= 3)
-            img_h = round_up(img_origin_h + tensor_pad(dim), dim);
+        img_h = img_origin_h;
+
+        if (dim >= 3) {
+            if (img_origin_h % dim != 0)
+                img_h = round_up(img_origin_h + tensor_pad(dim), dim);
+        }
     }
 
     int tensor_pad(int k) {
@@ -322,7 +326,7 @@ static void test_feature_map() {
 
     assert(fms.round_num() == 2);
     assert(fms.map_pad() == 1);
-    assert(fms.size() == 6*12*4*32);
+    assert(fms.size() == 2*5*12*4*32);
     assert(fms.img_addr(3, 0) == 3*3);
     assert(fms.img_addr(3, 2) == fms.img_addr(3, 0) + 12*2*32);
     assert(fms.img_addr(7, 0) == 7*3+1);
