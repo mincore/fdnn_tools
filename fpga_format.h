@@ -75,11 +75,12 @@ bool format_to_fpga(T &t, const std::vector<float> &input, std::vector<float> &o
 struct weight {
     weight(int dim, int inputs, int outputs): dim_(dim), inputs_(inputs), outputs_(outputs) {
         switch (dim_) {
-        case 1: block_w_convs_ = 16; block_h_convs_ = 10; block_pad_w_ = 0; break;
-        case 3: block_w_convs_ =  5; block_h_convs_ = 10; block_pad_w_ = 1; break;
-        case 5: block_w_convs_ =  2; block_h_convs_ = 10; block_pad_w_ = 6; break;
-        case 7: block_w_convs_ =  2; block_h_convs_ =  5; block_pad_w_ = 2; break;
+        case 1: block_w_convs_ = 16; block_h_convs_ = 10; break;
+        case 3: block_w_convs_ =  5; block_h_convs_ =  8; break;
+        case 5: block_w_convs_ =  2; block_h_convs_ =  8; break;
+        case 7: block_w_convs_ =  1; block_h_convs_ =  8; break;
         }
+        block_pad_w_ = (HALF_STRIDE - block_w_convs_ * dim);
     }
 
     int dim_;
@@ -89,62 +90,69 @@ struct weight {
     int inputs_;
     int outputs_;
 
+    int conv_w() { return dim_; }
+    int conv_h() { return dim_*dim_; }
+    int size() { return STRIDE * cell_h() * outputs_; }
+
     int block_convs() { return block_w_convs_ * block_h_convs_; }
-    int block_w() { return block_w_convs_ * dim_; }
-    int block_h() { return block_h_convs_ * dim_; }
+    int block_w() { return block_w_convs_ * conv_w(); }
+    int block_h() { return block_h_convs_ * conv_h(); }
 
     int cell_w_convs() { return block_w_convs_; }
     int cell_h_convs() { return round_up(inputs_, block_convs()) / block_w_convs_; }
     int cell_convs() { return cell_w_convs() * cell_h_convs(); }
-    int cell_w() { return cell_w_convs() * dim_; }
-    int cell_h() { return cell_h_convs() * dim_; }
+    int cell_w() { return cell_w_convs() * conv_w(); }
+    int cell_h() { return cell_h_convs() * conv_h(); }
 
-    int conv_size() { return dim_ * dim_; }
-    int size() { return STRIDE * cell_h() * outputs_; }
+    int get_cell_addr(int cell) {
+        return (cell/2) * cell_h() * STRIDE + ((cell%2) ? HALF_STRIDE : 0);
+    }
+
+    int get_conv_addr(int conv, int sub_conv) {
+        int w_convs = conv % block_w_convs_;
+        int h_convs = conv / block_w_convs_;
+        return (h_convs + sub_conv) * conv_h() * STRIDE + w_convs * conv_w();
+    }
+
+    void fill_conv(int cell, int conv,
+            const float *pconv, std::vector<float> &output) {
+        int cell_addr = get_cell_addr(cell);
+        int count = dim_*dim_;
+
+        // sub_conv
+        for (int sub_conv=0; sub_conv<dim_; sub_conv++) {
+            int conv_addr = cell_addr + get_conv_addr(conv, sub_conv);
+            // n: the number in a conv
+            for (int n=0; n<count; n++) {
+                int x = n % dim_;
+                int y = ( n / dim_ + sub_conv  ) % dim_;
+                int addr = conv_addr + x * STRIDE + y;
+                output[addr] = pconv[n];
+            }
+        }
+    }
 
     int get_pixel_addr(int cell, int conv, int pixel) {
-        int n_cell_stride = cell/2;
-        int n_conv_stride = conv / block_w_convs_;
-
-        int n_pixel_stride = pixel % dim_;
-        n_pixel_stride += n_cell_stride * cell_h();
-        n_pixel_stride += n_conv_stride * dim_;
-
-        int addr = n_pixel_stride * STRIDE;
-        addr += (cell % 2) ? HALF_STRIDE : 0;
-        addr += (conv % block_w_convs_) * dim_;
-        addr += pixel / dim_;
-
-        return addr;
+        int cell_addr = get_cell_addr(cell);
+        int conv_addr = get_conv_addr(conv, 0);
+        int sub_conv = 0;
+        int n = pixel;
+        int x = n  % dim_;
+        int y = ( n / dim_ + sub_conv ) % dim_;
+        return cell_addr + conv_addr + x * 32 + y;
     }
 
     bool format(const std::vector<float> &input, std::vector<float> &output) {
-        if ((int)input.size() < outputs_*inputs_*conv_size())
+        if ((int)input.size() < outputs_*inputs_*dim_*dim_)
             return false;
 
         output = std::vector<float>(size(), 0);
 
-        int n = 0;
-        for (int i=0; i<outputs_; i++) {
-            for (int j=0; j<inputs_; j++) {
-                for (int k=0; k<conv_size(); k++) {
-                    output[get_pixel_addr(i, j, k)] = input[n++];
-                }
+        for (int cell=0; cell<outputs_; cell++) {
+            for (int conv=0; conv<inputs_; conv++) {
+                const float *pconv = &input[(cell*inputs_+conv)*dim_*dim_];
+                fill_conv(cell, conv, pconv, output);
             }
-        }
-
-        return true;
-    }
-
-    bool fill_weight(int cell, int conv, const std::vector<float> &input, std::vector<float> &output) {
-        if ((int)input.size() != conv_size())
-            return false;
-
-        if ((int)output.size() != size())
-            return false;
-
-        for (int k=0; k<conv_size(); k++) {
-            output[get_pixel_addr(cell, conv, k)] = input[k];
         }
 
         return true;
@@ -495,15 +503,16 @@ static void test_feature_map() {
 static void test_3x3() {
     weight w(3, 64, 3);
 
+    printf("block_pad_w_:%d block_w:%d\n", w.block_pad_w_, w.block_w());
     assert(w.block_pad_w_ + w.block_w() == HALF_STRIDE);
-    assert(w.block_convs() == 50);
+    assert(w.block_convs() == 40);
     assert(w.cell_w_convs() == 5);
-    assert(w.cell_h_convs() == 20);
-    assert(w.cell_convs() == 100);
+    assert(w.cell_h_convs() == 16);
+    assert(w.cell_convs() == 80);
     assert(w.cell_w() == 5*3);
-    assert(w.cell_h() == 2*10*3);
+    assert(w.cell_h() == 2*8*3*3);
 
-    int base = 2*10*3*32 + 1*3*32 + 16 + 3;
+    int base = 2*8*3*3*32 + 1*3*3*32 + 16 + 3;
 
     assert(w.get_pixel_addr(3, 6, 0) == base);
     assert(w.get_pixel_addr(3, 6, 3) == base + 32*0 + 1);
@@ -513,43 +522,43 @@ static void test_3x3() {
 }
 
 static void test_5x5() {
-    weight w(5, 64, 3);
+    weight w(5, 30, 3);
 
     assert(w.block_pad_w_ + w.block_w() == HALF_STRIDE);
-    assert(w.block_convs() == 20);
+    assert(w.block_convs() == 2*8);
     assert(w.cell_w_convs() == 2);
-    assert(w.cell_h_convs() == 4*10);
-    assert(w.cell_convs() == 80);
+    assert(w.cell_h_convs() == 16);
+    assert(w.cell_convs() == 32);
     assert(w.cell_w() == 2*5);
-    assert(w.cell_h() == 4*10*5);
+    assert(w.cell_h() == 2*8*5*5);
 
-    int base = 4*10*5*32 + 2*5*32 + 16 + 5;
+    int base = 2*8*5*5*32 + 1*5*5*32 + 16 + 5;
 
-    assert(w.get_pixel_addr(3, 5, 0) == base);
-    assert(w.get_pixel_addr(3, 5, 3) == base + 32*3 + 0);
-    assert(w.get_pixel_addr(3, 5, 4) == base + 32*4 + 0);
-    assert(w.get_pixel_addr(3, 5, 5) == base + 32*0 + 1);
-    assert(w.get_pixel_addr(3, 5, 8) == base + 32*3 + 1);
+    assert(w.get_pixel_addr(3, 3, 0) == base);
+    assert(w.get_pixel_addr(3, 3, 3) == base + 32*3 + 0);
+    assert(w.get_pixel_addr(3, 3, 4) == base + 32*4 + 0);
+    assert(w.get_pixel_addr(3, 3, 5) == base + 32*0 + 1);
+    assert(w.get_pixel_addr(3, 3, 8) == base + 32*3 + 1);
 }
 
 static void test_7x7() {
-    weight w(7, 64, 3);
+    weight w(7, 16, 3);
 
     assert(w.block_pad_w_ + w.block_w() == HALF_STRIDE);
-    assert(w.block_convs() == 10);
-    assert(w.cell_w_convs() == 2);
-    assert(w.cell_h_convs() == 7*5);
-    assert(w.cell_convs() == 70);
-    assert(w.cell_w() == 2*7);
-    assert(w.cell_h() == 7*5*7);
+    assert(w.block_convs() == 1*8);
+    assert(w.cell_w_convs() == 1);
+    assert(w.cell_h_convs() == 16);
+    assert(w.cell_convs() == 16);
+    assert(w.cell_w() == 1*7);
+    assert(w.cell_h() == 2*8*7*7);
 
-    int base = 7*5*7*32 + 2*7*32 + 16 + 7;
+    int base = 2*8*7*7*32 + 1*7*7*32 + 16 + 0;
 
-    assert(w.get_pixel_addr(3, 5, 0) == base);
-    assert(w.get_pixel_addr(3, 5, 3) == base + 32*3 + 0);
-    assert(w.get_pixel_addr(3, 5, 4) == base + 32*4 + 0);
-    assert(w.get_pixel_addr(3, 5, 5) == base + 32*5 + 0);
-    assert(w.get_pixel_addr(3, 5, 8) == base + 32*1 + 1);
+    assert(w.get_pixel_addr(3, 1, 0) == base);
+    assert(w.get_pixel_addr(3, 1, 3) == base + 32*3 + 0);
+    assert(w.get_pixel_addr(3, 1, 4) == base + 32*4 + 0);
+    assert(w.get_pixel_addr(3, 1, 5) == base + 32*5 + 0);
+    assert(w.get_pixel_addr(3, 1, 8) == base + 32*1 + 1);
 }
 
 static void test_1x1() {

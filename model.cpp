@@ -34,14 +34,14 @@ public:
     }
 
     bool run() {
+        printf("testing 1x1\n");
+        test_1x1();
         printf("testing 3x3\n");
         test_3x3();
         printf("testing 5x5\n");
         test_5x5();
         printf("testing 7x7\n");
         test_7x7();
-        printf("testing 1x1\n");
-        test_1x1();
         printf("testing conv_fcw\n");
         test_conv_fcw();
         printf("testing fc_fcw\n");
@@ -194,6 +194,7 @@ private:
     int img_count;
 };
 
+#if 0
 class fill_conv_param_t: public param_t {
 public:
     fill_conv_param_t(CLI::App &app) {
@@ -246,6 +247,7 @@ private:
     float value;
     bool with_index = false;
 };
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -259,7 +261,7 @@ int main(int argc, char *argv[])
         std::make_shared<format_bias_param_t>(app),
         std::make_shared<format_fcbias_param_t>(app),
         std::make_shared<format_img_param_t>(app),
-        std::make_shared<fill_conv_param_t>(app),
+        //std::make_shared<fill_conv_param_t>(app),
     };
 
     try {
