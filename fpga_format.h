@@ -25,10 +25,10 @@ static inline int round_up(int x, int base) {
     return base * (x/base + (x%base ? 1 : 0));
 }
 
-template<class T>
-static void transpose(const T *src, T *dst, int d0, int d1, int d2, int d3)
+template<class F>
+static void transpose(const F *src, F *dst, int d0, int d1, int d2, int d3)
 {
-    auto r = *reinterpret_cast<const T(*)[d3][d2][d1][d0]>(src);
+    auto r = *reinterpret_cast<const F(*)[d3][d2][d1][d0]>(src);
     int n = 0;
 
     for (int i=0; i<d0; i++) {
@@ -42,12 +42,12 @@ static void transpose(const T *src, T *dst, int d0, int d1, int d2, int d3)
     }
 }
 
-template<class T>
-bool format_to_fpga(T &t, std::vector<float> &output,
+template<class T, class F>
+bool format_to_fpga(T &t, std::vector<F> &output,
         const std::string &input_file,
         const std::string &output_file = "")
 {
-    std::vector<float> input;
+    std::vector<F> input;
     if (!read_file(input_file, input))
         return false;
 
@@ -59,15 +59,15 @@ bool format_to_fpga(T &t, std::vector<float> &output,
     return ret;
 }
 
-template<class T>
-bool format_to_fpga(T &t, const float *src, int size, std::vector<float> &output)
+template<class T, class F>
+bool format_to_fpga(T &t, const F *src, int size, std::vector<F> &output)
 {
-    std::vector<float> input(src, src+size);
+    std::vector<F> input(src, src+size);
     return t.format(input, output);
 }
 
-template<class T>
-bool format_to_fpga(T &t, const std::vector<float> &input, std::vector<float> &output)
+template<class T, class F>
+bool format_to_fpga(T &t, const std::vector<F> &input, std::vector<F> &output)
 {
     return t.format(input, output);
 }
@@ -92,7 +92,8 @@ struct weight {
 
     int conv_w() { return dim_; }
     int conv_h() { return dim_*dim_; }
-    int size() { return STRIDE * cell_h() * outputs_; }
+    int conv_size() { return conv_w() * conv_h(); }
+    int size() { return STRIDE * cell_h() * outputs_/2; }
 
     int block_convs() { return block_w_convs_ * block_h_convs_; }
     int block_w() { return block_w_convs_ * conv_w(); }
@@ -111,11 +112,12 @@ struct weight {
     int get_conv_addr(int conv, int sub_conv) {
         int w_convs = conv % block_w_convs_;
         int h_convs = conv / block_w_convs_;
-        return (h_convs + sub_conv) * conv_h() * STRIDE + w_convs * conv_w();
+        return (h_convs*conv_h() + sub_conv*dim_) * STRIDE + w_convs * conv_w();
     }
 
+    template<class F>
     void fill_conv(int cell, int conv,
-            const float *pconv, std::vector<float> &output) {
+            const F *pconv, std::vector<F> &output) {
         int cell_addr = get_cell_addr(cell);
         int count = dim_*dim_;
 
@@ -142,15 +144,16 @@ struct weight {
         return cell_addr + conv_addr + x * 32 + y;
     }
 
-    bool format(const std::vector<float> &input, std::vector<float> &output) {
+    template<class F>
+    bool format(const std::vector<F> &input, std::vector<F> &output) {
         if ((int)input.size() < outputs_*inputs_*dim_*dim_)
             return false;
 
-        output = std::vector<float>(size(), 0);
+        output = std::vector<F>(size(), 0);
 
         for (int cell=0; cell<outputs_; cell++) {
             for (int conv=0; conv<inputs_; conv++) {
-                const float *pconv = &input[(cell*inputs_+conv)*dim_*dim_];
+                const F *pconv = &input[(cell*inputs_+conv)*dim_*dim_];
                 fill_conv(cell, conv, pconv, output);
             }
         }
@@ -176,13 +179,14 @@ public:
     int size() { return cell_n_stride_ * outputs_ * STRIDE; }
     int group_size() { return group_n_stride_*HALF_STRIDE; }
 
-    bool format(const std::vector<float> &input, std::vector<float> &output) {
+    template<class F>
+    bool format(const std::vector<F> &input, std::vector<F> &output) {
         if ((int)input.size() < outputs_*inputs_)
             return false;
 
-        output = std::vector<float>(size(), 0);
-        const float *in = &input[0];
-        float *out = &output[0];
+        output = std::vector<F>(size(), 0);
+        const F *in = &input[0];
+        F *out = &output[0];
 
         for (int i=0; i<outputs_; i++) {
             for (int j=0; j<cell_n_groups_; j++) {
@@ -195,7 +199,8 @@ public:
     }
 
 private:
-    int fill_group(const float *in, float *out) {
+    template<class F>
+    int fill_group(const F *in, F *out) {
         for (int k=0; k<group_n_stride_; k++) {
             memcpy(out, in, HALF_STRIDE*4);
         }
@@ -230,15 +235,16 @@ public:
     int size() { return cell_n_stride_ * outputs_ * STRIDE; }
     int cell_size() { return block_n_stride_*HALF_STRIDE; }
 
-    bool format(const std::vector<float> &input, std::vector<float> &output) {
+    template<class F>
+    bool format(const std::vector<F> &input, std::vector<F> &output) {
         if ((int)input.size() < outputs_*inputs_)
             return false;
 
-        output = std::vector<float>(size(), 0);
-        const float *in = &input[0];
+        output = std::vector<F>(size(), 0);
+        const F *in = &input[0];
 
         for (int i=0; i<outputs_; i++) {
-            float *out = &output[get_cell_addr(i)];
+            F *out = &output[get_cell_addr(i)];
             in += fill_cell(in, out);
         }
 
@@ -246,7 +252,8 @@ public:
     }
 
 private:
-    int fill_cell(const float *in, float *out) {
+    template<class F>
+    int fill_cell(const F *in, F *out) {
         memcpy(out, in, inputs_);
         return cell_size();
     }
@@ -273,11 +280,12 @@ public:
     int get_bias_addr(int index) { return (index/2)*STRIDE + (index%2); }
     int size() { return (inputs_/2) * STRIDE; }
 
-    bool format(const std::vector<float> &input, std::vector<float> &output) {
+    template<class F>
+    bool format(const std::vector<F> &input, std::vector<F> &output) {
         if ((int)input.size() < inputs_)
             return false;
 
-        output = std::vector<float>(size(), 0);
+        output = std::vector<F>(size(), 0);
 
         for (int i=0; i<inputs_; i++) {
             output[get_bias_addr(i)] = input[i];
@@ -304,11 +312,12 @@ public:
     int get_bias_addr(int index) { return index*STRIDE; }
     int size() { return inputs_ * STRIDE; }
 
-    bool format(const std::vector<float> &input, std::vector<float> &output) {
+    template<class F>
+    bool format(const std::vector<F> &input, std::vector<F> &output) {
         if ((int)input.size() < inputs_)
             return false;
 
-        output = std::vector<float>(size(), 0);
+        output = std::vector<F>(size(), 0);
 
         for (int i=0; i<inputs_; i++) {
             output[get_bias_addr(i)] = input[i];
@@ -371,32 +380,34 @@ struct feature_maps {
         return x * STRIDE + y;
     }
 
-    void pad_input(const std::vector<float> &src, std::vector<float> &dst) {
-        dst = std::vector<float>(img_h_*img_h_*img_count_, 0);
+    template<class F>
+    void pad_input(const std::vector<F> &src, std::vector<F> &dst) {
+        dst = std::vector<F>(img_h_*img_h_*img_count_, 0);
 
-        const float *psrc = &src[0];
-        float *pdst = &dst[0] + tensor_pad_*img_h_ + tensor_pad_;
+        const F *psrc = &src[0];
+        F *pdst = &dst[0] + tensor_pad_*img_h_ + tensor_pad_;
         int diff = img_h_ - img_origin_h_;
 
         for (int i=0; i<img_count_ * img_origin_h_; i++) {
-            memcpy(pdst, psrc, img_origin_h_*sizeof(float));
+            memcpy(pdst, psrc, img_origin_h_*sizeof(F));
             pdst += (i > 0 && (i%img_origin_h_ == 0)) ? (diff*img_h_) : img_h_;
             psrc += img_origin_h_;
         }
     }
 
-    bool format(const std::vector<float> &input1, std::vector<float> &output) {
+    template<class F>
+    bool format(const std::vector<F> &input1, std::vector<F> &output) {
         if ((int)input1.size() != img_origin_h_ * img_origin_h_ * img_count_) {
             printf("error, input size:%zd, img_origin_h_:%d, img_count_:%d\n", input1.size(), img_origin_h_, img_count_);
             return false;
         }
 
-        std::vector<float> input;
+        std::vector<F> input;
         pad_input(input1, input);
         output.resize(size());
 
-        const float *in = &input[0];
-        float *out = &output[0];
+        const F *in = &input[0];
+        F *out = &output[0];
 
         for (int img=0; img<img_count_; img++) {
             for (int part=0; part<part_num(); part++) {
@@ -408,7 +419,8 @@ struct feature_maps {
         return true;
     }
 
-    int fill_part(int addr, const float *in, float *out) {
+    template<class F>
+    int fill_part(int addr, const F *in, F *out) {
         for (int i=0; i<part_size(); i++) {
             int subaddr = pixel_addr(i);
             out[addr + subaddr] = in[i];
@@ -416,15 +428,16 @@ struct feature_maps {
         return part_size();
     }
 
-    bool fill_img(int img, const std::vector<float> &input, std::vector<float> &output) {
+    template<class F>
+    bool fill_img(int img, const std::vector<F> &input, std::vector<F> &output) {
         if ((int)input.size() != map_size())
             return false;
 
         if ((int)input.size() != map_size() * img_count_)
             return false;
 
-        const float *in = &input[0];
-        float *out = &output[0];
+        const F *in = &input[0];
+        F *out = &output[0];
 
         for (int part=0; part<part_num(); part++) {
             in += fill_part(img_addr(img, part), in, out);
@@ -443,10 +456,11 @@ public:
 
     int size() { return (inputs_/2) * STRIDE; }
 
-    bool format(const void *pDataW, const void *pDataB, std::vector<float> &output) {
+    template<class F>
+    bool format(const void *pDataW, const void *pDataB, std::vector<F> &output) {
         const char *pweight = (const char *)pDataW;
         const char *pbias = (const char *)pDataB;
-        output = std::vector<float>(size(), 0);
+        output = std::vector<F>(size(), 0);
 
         for (int i=0; i<inputs_; i++) {
             output[get_weight_addr(i)] = pweight[i];
@@ -469,10 +483,11 @@ public:
 
     int size() { return inputs_ * STRIDE; }
 
-    bool format(const void *pDataW, const void *pDataB, std::vector<float> &output) {
+    template<class F>
+    bool format(const void *pDataW, const void *pDataB, std::vector<F> &output) {
         const char *pweight = (const char *)pDataW;
         const char *pbias = (const char *)pDataB;
-        output = std::vector<float>(size(), 0);
+        output = std::vector<F>(size(), 0);
 
         for (int i=0; i<inputs_; i++) {
             output[get_weight_addr(i)] = pweight[i];
