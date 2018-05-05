@@ -166,7 +166,7 @@ class conv_fcw {
 public:
     conv_fcw(int inputs, int outputs): inputs_(inputs), outputs_(outputs) {
         cell_n_stride_ = (round_up(inputs_, block_n_pixel_) / block_n_pixel_) * block_n_stride_;
-        cell_n_groups_ = cell_n_stride_ / group_n_stride_ * 2;
+        cell_n_groups_ = round_up(inputs, 480) / 480;
     }
 
     int get_group_addr(int cell, int group) {
@@ -337,7 +337,8 @@ static void test_fc_bias() {
 }
 
 struct feature_maps {
-    feature_maps(int dim, int img_h, int img_count): conv_h_(dim), img_origin_h_(img_h), img_count_(img_count) {
+    feature_maps(int dim, int img_h, int img_count, bool for_same_conv = false):
+        conv_h_(dim), img_origin_h_(img_h), img_count_(img_count) {
         switch (dim) {
         case 1: stride_imgs_ = 32; round_imgs_ = 160; break;
         case 3: stride_imgs_ = 10; round_imgs_ = 50;  break;
@@ -345,8 +346,11 @@ struct feature_maps {
         case 7: stride_imgs_ = 2;  round_imgs_ = 10;  break;
         }
 
-        tensor_pad_ = (dim == 1) ? 0 : (dim - 1)/2;
-        img_h_ = (dim == 1) ? img_origin_h_ : round_up(img_origin_h_ + 2*tensor_pad_, dim);
+        if (for_same_conv)
+            pad0_ = (dim == 1) ? 0 : (dim - 1)/2;
+
+        img_h_ = round_up(img_origin_h_ + 2*pad0_, dim);
+        pad1_ = img_h_ - img_origin_h_ - pad0_;
     }
 
     int round_imgs_;
@@ -355,7 +359,8 @@ struct feature_maps {
     int img_count_;
     int stride_imgs_;
     int img_h_;
-    int tensor_pad_;
+    int pad0_ = 0;
+    int pad1_ = 0;
 
     int round_num() { return round_up(img_count_, round_imgs_) / round_imgs_; }
     int round_h_imgs() { return round_imgs_/stride_imgs_; }
@@ -385,7 +390,7 @@ struct feature_maps {
         dst = std::vector<F>(img_h_*img_h_*img_count_, 0);
 
         const F *psrc = &src[0];
-        F *pdst = &dst[0] + tensor_pad_*img_h_ + tensor_pad_;
+        F *pdst = &dst[0] + pad0_ * img_h_ + pad0_;
         int diff = img_h_ - img_origin_h_;
 
         for (int i=0; i<img_count_ * img_origin_h_; i++) {
@@ -518,7 +523,6 @@ static void test_feature_map() {
 static void test_3x3() {
     weight w(3, 64, 3);
 
-    printf("block_pad_w_:%d block_w:%d\n", w.block_pad_w_, w.block_w());
     assert(w.block_pad_w_ + w.block_w() == HALF_STRIDE);
     assert(w.block_convs() == 40);
     assert(w.cell_w_convs() == 5);

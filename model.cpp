@@ -194,51 +194,31 @@ private:
     int img_count;
 };
 
-class fill_conv_param_t: public param_t {
+class make_weight_param_t: public param_t {
 public:
-    fill_conv_param_t(CLI::App &app) {
-        sub = app.add_subcommand("fill-conv", "fill a conv with specified value");
-        sub->add_option("--input", input_file, "the file to read");
+    make_weight_param_t(CLI::App &app) {
+        sub = app.add_subcommand("make-weight", "make a weight with specified value");
         sub->add_option("--output", output_file, "the file to write")->required();
         sub->add_set("--dim", dim, {1,3,5,7}, "the dim of conv")->required();
         sub->add_option("--inputs", inputs, "inputs")->required();
         sub->add_option("--outputs", outputs, "outputs")->required();
-        sub->add_option("--cell", cell, "which cell to fill");
-        sub->add_option("--conv", conv, "which conv to fill");
-        sub->add_option("--value", value, "fill by value");
+        sub->add_option("--value", value, "make by value");
     }
 
     bool run() {
+        auto input = make_input();
+        write_file(output_file + ".src", input);
+
         weight w(dim, inputs, outputs);
         std::vector<uint32_t> output;
 
-        printf("dim:%d inputs:%d outputs:%d cell:%d conv:%d value:%x\n",
-                dim, inputs, outputs, cell, conv, value);
-
-        printf("output size %d\n", w.size());
-
-        if (read_file(input_file, output) != (size_t)w.size()*4) {
-            output.resize(w.size());
-            memset(&output[0], 0, output.size()*4);
-        }
-
-        if (cell > 0 || conv > 0) {
-            fill_conv(w, cell, conv, value, output);
-        }
-        else {
-            for (int i=0; i<outputs; i++) {
-                for (int j=0; j<inputs; j++) {
-                    fill_conv(w, i, j, value, output);
-                }
-            }
-        }
-
+        w.format(input, output);
         write_file(output_file, output);
 
         return true;
     }
 
-    void fill_conv(weight &w, int cell, int conv, int val, std::vector<uint32_t> &output) {
+    void make_weight(weight &w, int cell, int conv, int val, std::vector<uint32_t> &output) {
         std::vector<uint32_t> input(w.conv_h());
         for (size_t i=0; i<input.size(); i++) {
             input[i] = (cell << 16) | (conv << 8) | (val == 0 ? i : val);
@@ -247,14 +227,172 @@ public:
         w.fill_conv(cell, conv, &input[0], output);
     }
 
+    std::vector<uint32_t> make_input() {
+        int size = dim*dim;
+        std::vector<uint32_t> input(outputs*inputs*size);
+
+        int n = 0;
+        for (int i=0; i<outputs; i++) {
+            for (int j=0; j<inputs; j++) {
+                for (int k=0; k<size; k++) {
+                    input[n++] = (i << 16) | (j << 8) | k;
+                }
+            }
+        }
+
+        return input;
+    }
+
 private:
-    std::string input_file;
     std::string output_file;
     int dim;
     int inputs;
     int outputs;
-    int cell = 0;
-    int conv = 0;
+    uint32_t value = 0;
+};
+
+template<class T>
+class make_bias_param_t: public param_t {
+public:
+    make_bias_param_t(CLI::App &app, const std::string &name) {
+        sub = app.add_subcommand(std::string("make-") + name, "make a bias with specified value");
+        sub->add_option("--output", output_file, "the file to write")->required();
+        sub->add_option("--inputs", inputs, "inputs")->required();
+        sub->add_option("--value", value, "make by value");
+    }
+
+    bool run() {
+        auto input = make_input();
+        write_file(output_file + ".src", input);
+
+        T b(inputs);
+        std::vector<uint32_t> output;
+
+        b.format(input, output);
+        write_file(output_file, output);
+
+        return true;
+    }
+
+    std::vector<uint32_t> make_input() {
+        std::vector<uint32_t> input(inputs, value);
+
+        if (value == 0) {
+            for (size_t i=0; i<input.size(); i++) {
+                input[i] = i;
+            }
+        }
+
+        return input;
+    }
+
+private:
+    std::string output_file;
+    int inputs;
+    uint32_t value = 0;
+};
+
+template<class T>
+class make_fcw_param_t: public param_t {
+public:
+    make_fcw_param_t(CLI::App &app, const std::string &name) {
+        sub = app.add_subcommand(std::string("make-")+name, "make a fc weight with specified value");
+        sub->add_option("--output", output_file, "the file to write")->required();
+        sub->add_option("--inputs", inputs, "inputs")->required();
+        sub->add_option("--outputs", outputs, "outputs")->required();
+        sub->add_option("--value", value, "make by value");
+    }
+
+    bool run() {
+        auto input = make_input();
+        write_file(output_file + ".src", input);
+
+        T w(inputs, outputs);
+        std::vector<uint32_t> output;
+
+        w.format(input, output);
+        write_file(output_file, output);
+
+        return true;
+    }
+
+    std::vector<uint32_t> make_input() {
+        std::vector<uint32_t> input(inputs*outputs, value);
+
+        if (value == 0) {
+            int n = 0;
+            for (int i=0; i<outputs; i++) {
+                for (int j=0; j<inputs; j++) {
+                    input[n++] = (i << 8) | j;
+                }
+            }
+        }
+
+        return input;
+    }
+
+private:
+    std::string output_file;
+    int inputs;
+    int outputs;
+    int value = 0;
+};
+
+class make_img_param_t: public param_t {
+public:
+    make_img_param_t(CLI::App &app) {
+        sub = app.add_subcommand("make-img", "make an img with specified value");
+        sub->add_set("--dim", dim, {1,3,5,7}, "the dim of conv")->required();
+        sub->add_option("--output", output_file, "the file to write")->required();
+        sub->add_option("--inputs", inputs, "how many imgs")->required();
+        sub->add_option("--imgh", img_h, "the height of img")->required();
+        sub->add_option("--value", value, "make by value");
+        sub->add_option("--same-conv", same_conv, "padding by same conv");
+    }
+
+    bool run() {
+        auto input = make_input();
+        write_file(output_file + ".src", input);
+
+        feature_maps fms(dim, img_h, inputs, same_conv);
+        std::vector<uint32_t> output;
+        fms.format(input, output);
+        write_file(output_file, output);
+
+        return true;
+    }
+
+    std::vector<uint32_t> make_input() {
+        std::vector<uint32_t> input(img_h*img_h*inputs, value);
+
+        if (value == 0) {
+            int n = 0;
+            for (int i=0; i<img_h; i++) {
+                for (int j=0; j<img_h; j++) {
+                    for (int k=0; k<inputs; k++) {
+                        input[n++] = (k << 24) | (i*img_h + j);
+                    }
+                }
+            }
+#if 0
+            int img_size = img_h * img_h;
+            for (int i=0; i<inputs; i++) {
+                for (int j=0; j<img_size; j++) {
+                    input[n++] = (i << 8) | j;
+                }
+            }
+#endif
+        }
+
+        return input;
+    }
+
+private:
+    std::string output_file;
+    int dim;
+    int inputs;
+    int img_h;
+    uint32_t same_conv = 0;
     uint32_t value = 0;
 };
 
@@ -270,7 +408,12 @@ int main(int argc, char *argv[])
         std::make_shared<format_bias_param_t>(app),
         std::make_shared<format_fcbias_param_t>(app),
         std::make_shared<format_img_param_t>(app),
-        std::make_shared<fill_conv_param_t>(app),
+        std::make_shared<make_weight_param_t>(app),
+        std::make_shared<make_bias_param_t<bias> >(app, "bias"),
+        std::make_shared<make_bias_param_t<fc_bias> >(app, "fcbias"),
+        std::make_shared<make_fcw_param_t<conv_fcw> >(app, "convfcw"),
+        std::make_shared<make_fcw_param_t<fc_fcw> >(app, "fcfcw"),
+        std::make_shared<make_img_param_t>(app),
     };
 
     try {
@@ -278,6 +421,8 @@ int main(int argc, char *argv[])
     } catch (const CLI::ParseError &e) {
         return app.exit(e);
     }
+
+    mkdir("src", 0755);
 
     for (auto &param : params) {
         if (param->ok()) {
