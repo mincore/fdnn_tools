@@ -332,6 +332,21 @@ private:
     int value = 0;
 };
 
+
+class xrand {
+public:
+    operator uint32_t () {
+        return rd();
+    }
+
+    operator float() {
+        return ((float)(rd() % 0xffff)) / 0xffff;
+    }
+
+private:
+    std::random_device rd;
+};
+
 class make_img_param_t: public param_t {
 public:
     make_img_param_t(CLI::App &app) {
@@ -345,8 +360,7 @@ public:
         sub->add_option("--channel", channel, "the channel of img, default 1");
         sub->add_flag("--fm", for_fm, "for feature_map");
         sub->add_flag("--rand", rand, "rand");
-        sub->add_option("--spec", spec, "which fm to set");
-        sub->add_option("--spec-value", spec_value, "set value to spec fm");
+        sub->add_flag("--fm-inc-one-by-one", fm_inc_one_by_one, "feature_map inc one by one");
     }
 
     bool run() {
@@ -380,20 +394,17 @@ public:
         if (value)
             return;
 
-        std::random_device rd;
-
         T v = 0.0;
         int n = 0;
+
+        xrand rd;
 
         if (for_fm) {
             for (int k=0; k<channel; k++) {
                 v = 0;
                 for (int i=0; i<img_h; i++) {
                     for (int j=0; j<img_h; j++) {
-                        if (spec == k)
-                            input[n++] = spec_value;
-                        else
-                            input[n++] = rand ? rd() : v++;
+                        input[n++] = rand ? rd : (fm_inc_one_by_one ? (k+1) : v++);
                     }
                 }
             }
@@ -402,7 +413,7 @@ public:
                 for (int j=0; j<img_h; j++) {
                     v++;
                     for (int k=0; k<channel; k++) {
-                        input[n++] = rand ? rd() : v;
+                        input[n++] = rand ? rd : v;
                     }
                 }
             }
@@ -419,8 +430,7 @@ private:
     bool use_float = false;
     bool for_fm = false;
     bool rand = false;
-    uint32_t spec = -1;
-    uint32_t spec_value = 0;
+    bool fm_inc_one_by_one = false;
 };
 
 int main(int argc, char *argv[])
