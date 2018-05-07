@@ -348,58 +348,82 @@ public:
         sub->add_option("--imgh", img_h, "the height of img")->required();
         sub->add_option("--value", value, "make by value");
         sub->add_option("--same-conv", same_conv, "padding by same conv");
+        sub->add_flag("-f,--float", use_float, "use float");
     }
 
     bool run() {
-        auto input = make_input();
-        write_file(output_file + ".src", input);
-
         feature_maps fms(dim, img_h, inputs, same_conv);
-        std::vector<uint32_t> output;
-        fms.format(input, output);
-        write_file(output_file, output);
+
+        if (use_float) {
+            std::vector<float> input = make_inputf();
+            std::vector<float> output;
+
+            write_file(output_file + ".src", input);
+            fms.format(input, output);
+            write_file(output_file, output);
+        } else {
+            std::vector<uint32_t> input = make_input();
+            std::vector<uint32_t> output;
+
+            write_file(output_file + ".src", input);
+            fms.format(input, output);
+            write_file(output_file, output);
+        }
 
         return true;
     }
 
     std::vector<uint32_t> make_input() {
         std::vector<uint32_t> input(img_h*img_h*inputs, value);
+        if (value)
+            return input;
 
-        if (value == 0) {
-#if 1
-            int n = 0;
-            int index = 0;
-            int x = img_h/dim;
-            int y = img_h%dim;
+        int v = 0;
+        int n = 0;
+        int x = img_h/dim;
+        int y = img_h%dim;
 
-            for (int i=0; i<inputs; i++) {
-                for (int j=0; j<img_h; j++) {
-                    for (int k=0; k<x; k++) {
-                        index++;
-                        for (int d=0; d<dim; d++) {
-                            input[n++] = (d+1) << 24 | index;
-                        }
-                    }
-                    for (int a=0; a<y; a++) {
-                        index++;
-                        input[n++] = (a+1) << 24 | index;
+        for (int i=0; i<inputs; i++) {
+            for (int j=0; j<img_h; j++) {
+                for (int k=0; k<x; k++) {
+                    v++;
+                    for (int d=0; d<dim; d++) {
+                        input[n++] = (d+1) << 24 | v;
                     }
                 }
-            }
-#else
-            int n = 0;
-
-            for (int i=0; i<inputs; i++) {
-                for (int j=0; j<img_h; j++) {
-                    for (int k=0; k<img_h; i++) {
-                        for (int d=0; d<dim; d++) {
-                            input[n] = (d+1) << 24 | n;
-                            n++;
-                        }
-                    }
+                for (int a=0; a<y; a++) {
+                    v++;
+                    input[n++] = (a+1) << 24 | v;
                 }
             }
-#endif
+        }
+
+        return input;
+    }
+
+    std::vector<float> make_inputf() {
+        std::vector<float> input(img_h*img_h*inputs, value);
+        if (value)
+            return input;
+
+        float v = 0.0;
+        int n = 0;
+        int x = img_h/dim;
+        int y = img_h%dim;
+
+        for (int i=0; i<inputs; i++) {
+            for (int j=0; j<img_h; j++) {
+                for (int k=0; k<x; k++) {
+                    v++;
+                    for (int d=0; d<dim; d++) {
+                        input[n++] = v;
+                    }
+                }
+                for (int a=0; a<y; a++) {
+                    v++;
+                    input[n++] = v;
+                }
+            }
         }
 
         return input;
@@ -412,6 +436,7 @@ private:
     int img_h;
     uint32_t same_conv = 0;
     uint32_t value = 0;
+    bool use_float = false;
 };
 
 int main(int argc, char *argv[])
