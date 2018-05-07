@@ -370,7 +370,7 @@ public:
             fms.format(input, output);
             write_file(output_file, output);
         } else {
-            write_file(output_file + ".src", input);
+            write_file(output_file, input);
         }
     }
 
