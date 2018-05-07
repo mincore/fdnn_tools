@@ -8,8 +8,8 @@
  */
 #include <stdlib.h>
 
-#include "kx/kx_file.h"
-#include "kx/CLI11.hpp"
+#include "file.h"
+#include "CLI11.hpp"
 
 using namespace kx;
 
