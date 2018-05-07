@@ -338,7 +338,7 @@ static void test_fc_bias() {
 
 struct feature_maps {
     feature_maps(int dim, int img_h, int img_count, bool for_same_conv = false, int img_channel = 1):
-        conv_h_(dim), img_origin_h_(img_h), img_count_(img_count), img_channel_(img_channel) {
+        conv_h_(dim), img_origin_h_(img_h), img_count_(img_count) {
         switch (dim) {
         case 1: stride_imgs_ = 32; round_imgs_ = 160; break;
         case 3: stride_imgs_ = 10; round_imgs_ = 50;  break;
@@ -357,7 +357,6 @@ struct feature_maps {
     int conv_h_;
     int img_origin_h_;
     int img_count_;
-    int img_channel_;
     int stride_imgs_;
     int img_h_;
     int pad0_ = 0;
@@ -388,7 +387,7 @@ struct feature_maps {
 
     template<class F>
     void pad_input(const std::vector<F> &src, std::vector<F> &dst) {
-        dst = std::vector<F>(img_h_*img_h_*img_count_*img_channel_, 0);
+        dst = std::vector<F>(img_h_*img_h_*img_count_, 0);
 
         const F *psrc = &src[0];
         F *pdst = &dst[0] + pad0_ * img_h_ + pad0_;
@@ -403,7 +402,7 @@ struct feature_maps {
 
     template<class F>
     bool format(const std::vector<F> &input1, std::vector<F> &output) {
-        if ((int)input1.size() != img_origin_h_ * img_origin_h_ * img_channel_ * img_count_)
+        if ((int)input1.size() != img_origin_h_ * img_origin_h_ * img_count_)
             return false;
 
         std::vector<F> input;

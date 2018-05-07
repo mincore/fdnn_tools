@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <random>
 
 #include "CLI11.hpp"
 #include "fpga_format.h"
@@ -337,12 +338,15 @@ public:
         sub = app.add_subcommand("make-img", "make an img with specified value");
         sub->add_set("--dim", dim, {1,3,5,7}, "the dim of conv")->required();
         sub->add_option("--output", output_file, "the file to write")->required();
-        sub->add_option("--inputs", inputs, "how many imgs, default 1");
         sub->add_option("--imgh", img_h, "the height of img")->required();
         sub->add_option("--value", value, "make by value");
         sub->add_option("--same-conv", same_conv, "padding by same conv");
         sub->add_flag("-f,--float", use_float, "use float");
         sub->add_option("--channel", channel, "the channel of img, default 1");
+        sub->add_flag("--fm", for_fm, "for feature_map");
+        sub->add_flag("--rand", rand, "rand");
+        sub->add_option("--spec", spec, "which fm to set");
+        sub->add_option("--spec-value", spec_value, "set value to spec fm");
     }
 
     bool run() {
@@ -360,28 +364,45 @@ public:
         std::vector<T> output;
 
         make_input(input);
-        write_file(output_file + ".src", input);
 
-        feature_maps fms(dim, img_h, inputs, same_conv, channel);
-        fms.format(input, output);
-        write_file(output_file, output);
+        if (for_fm) {
+            feature_maps fms(dim, img_h, channel, same_conv);
+            fms.format(input, output);
+            write_file(output_file, output);
+        } else {
+        }
+        write_file(output_file + ".src", input);
     }
 
     template<class T>
     void make_input(std::vector<T> &input) {
-        input = std::vector<T>(channel*img_h*img_h*inputs, value);
+        input = std::vector<T>(channel*img_h*img_h, value);
         if (value)
             return;
+
+        std::random_device rd;
 
         T v = 0.0;
         int n = 0;
 
-        for (int a=0; a<inputs; a++) {
+        if (for_fm) {
+            for (int k=0; k<channel; k++) {
+                v = 0;
+                for (int i=0; i<img_h; i++) {
+                    for (int j=0; j<img_h; j++) {
+                        if (spec == k)
+                            input[n++] = spec_value;
+                        else
+                            input[n++] = rand ? rd() : v++;
+                    }
+                }
+            }
+        } else {
             for (int i=0; i<img_h; i++) {
                 for (int j=0; j<img_h; j++) {
                     v++;
                     for (int k=0; k<channel; k++) {
-                        input[n++] = v;
+                        input[n++] = rand ? rd() : v;
                     }
                 }
             }
@@ -391,12 +412,15 @@ public:
 private:
     std::string output_file;
     int dim;
-    int inputs = 1;
     int img_h;
     int channel = 1;
     uint32_t same_conv = 0;
     uint32_t value = 0;
     bool use_float = false;
+    bool for_fm = false;
+    bool rand = false;
+    uint32_t spec = -1;
+    uint32_t spec_value = 0;
 };
 
 int main(int argc, char *argv[])
