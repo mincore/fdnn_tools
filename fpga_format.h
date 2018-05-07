@@ -391,21 +391,19 @@ struct feature_maps {
 
         const F *psrc = &src[0];
         F *pdst = &dst[0] + pad0_ * img_h_ + pad0_;
-        int diff = img_h_ - img_origin_h_;
+        int diff = std::max(img_h_ - img_origin_h_, 1);
 
         for (int i=0; i<img_count_ * img_origin_h_; i++) {
             memcpy(pdst, psrc, img_origin_h_*sizeof(F));
-            pdst += (i > 0 && (i%img_origin_h_ == 0)) ? (diff*img_h_) : img_h_;
             psrc += img_origin_h_;
+            pdst += (i > 0 && (i%img_origin_h_ == 0)) ? (diff*img_h_) : img_h_;
         }
     }
 
     template<class F>
     bool format(const std::vector<F> &input1, std::vector<F> &output) {
-        if ((int)input1.size() != img_origin_h_ * img_origin_h_ * img_count_) {
-            printf("error, input size:%zd, img_origin_h_:%d, img_count_:%d\n", input1.size(), img_origin_h_, img_count_);
+        if ((int)input1.size() != img_origin_h_ * img_origin_h_ * img_count_)
             return false;
-        }
 
         std::vector<F> input;
         pad_input(input1, input);
@@ -431,24 +429,6 @@ struct feature_maps {
             out[addr + subaddr] = in[i];
         }
         return part_size();
-    }
-
-    template<class F>
-    bool fill_img(int img, const std::vector<F> &input, std::vector<F> &output) {
-        if ((int)input.size() != map_size())
-            return false;
-
-        if ((int)input.size() != map_size() * img_count_)
-            return false;
-
-        const F *in = &input[0];
-        F *out = &output[0];
-
-        for (int part=0; part<part_num(); part++) {
-            in += fill_part(img_addr(img, part), in, out);
-        }
-
-        return true;
     }
 };
 

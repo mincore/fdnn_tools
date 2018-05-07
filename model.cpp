@@ -366,19 +366,37 @@ public:
         std::vector<uint32_t> input(img_h*img_h*inputs, value);
 
         if (value == 0) {
+#if 1
             int n = 0;
-            for (int i=0; i<img_h; i++) {
+            int index = 0;
+            int x = img_h/dim;
+            int y = img_h%dim;
+
+            for (int i=0; i<inputs; i++) {
                 for (int j=0; j<img_h; j++) {
-                    for (int k=0; k<inputs; k++) {
-                        input[n++] = (k << 24) | (i*img_h + j);
+                    for (int k=0; k<x; k++) {
+                        index++;
+                        for (int d=0; d<dim; d++) {
+                            input[n++] = (d+1) << 24 | index;
+                        }
+                    }
+                    for (int a=0; a<y; a++) {
+                        index++;
+                        input[n++] = (a+1) << 24 | index;
                     }
                 }
             }
-#if 0
-            int img_size = img_h * img_h;
+#else
+            int n = 0;
+
             for (int i=0; i<inputs; i++) {
-                for (int j=0; j<img_size; j++) {
-                    input[n++] = (i << 8) | j;
+                for (int j=0; j<img_h; j++) {
+                    for (int k=0; k<img_h; i++) {
+                        for (int d=0; d<dim; d++) {
+                            input[n] = (d+1) << 24 | n;
+                            n++;
+                        }
+                    }
                 }
             }
 #endif
