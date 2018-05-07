@@ -203,6 +203,7 @@ public:
         sub->add_option("--inputs", inputs, "inputs")->required();
         sub->add_option("--outputs", outputs, "outputs")->required();
         sub->add_option("--value", value, "make by value");
+        sub->add_flag("-f,--float", use_float, "use float");
     }
 
     bool run() {
@@ -216,15 +217,6 @@ public:
         write_file(output_file, output);
 
         return true;
-    }
-
-    void make_weight(weight &w, int cell, int conv, int val, std::vector<uint32_t> &output) {
-        std::vector<uint32_t> input(w.conv_h());
-        for (size_t i=0; i<input.size(); i++) {
-            input[i] = (cell << 16) | (conv << 8) | (val == 0 ? i : val);
-        }
-
-        w.fill_conv(cell, conv, &input[0], output);
     }
 
     std::vector<uint32_t> make_input() {
@@ -249,6 +241,7 @@ private:
     int inputs;
     int outputs;
     uint32_t value = 0;
+    bool use_float = false;
 };
 
 template<class T>
@@ -344,96 +337,63 @@ public:
         sub = app.add_subcommand("make-img", "make an img with specified value");
         sub->add_set("--dim", dim, {1,3,5,7}, "the dim of conv")->required();
         sub->add_option("--output", output_file, "the file to write")->required();
-        sub->add_option("--inputs", inputs, "how many imgs")->required();
+        sub->add_option("--inputs", inputs, "how many imgs, default 1");
         sub->add_option("--imgh", img_h, "the height of img")->required();
         sub->add_option("--value", value, "make by value");
         sub->add_option("--same-conv", same_conv, "padding by same conv");
         sub->add_flag("-f,--float", use_float, "use float");
+        sub->add_option("--channel", channel, "the channel of img, default 1");
     }
 
     bool run() {
-        feature_maps fms(dim, img_h, inputs, same_conv);
-
-        if (use_float) {
-            std::vector<float> input = make_inputf();
-            std::vector<float> output;
-
-            write_file(output_file + ".src", input);
-            fms.format(input, output);
-            write_file(output_file, output);
-        } else {
-            std::vector<uint32_t> input = make_input();
-            std::vector<uint32_t> output;
-
-            write_file(output_file + ".src", input);
-            fms.format(input, output);
-            write_file(output_file, output);
-        }
+        if (use_float)
+            _run<float>();
+        else
+            _run<uint32_t>();
 
         return true;
     }
 
-    std::vector<uint32_t> make_input() {
-        std::vector<uint32_t> input(img_h*img_h*inputs, value);
-        if (value)
-            return input;
+    template<class T>
+    void _run() {
+        std::vector<T> input;
+        std::vector<T> output;
 
-        int v = 0;
-        int n = 0;
-        int x = img_h/dim;
-        int y = img_h%dim;
+        make_input(input);
+        write_file(output_file + ".src", input);
 
-        for (int i=0; i<inputs; i++) {
-            for (int j=0; j<img_h; j++) {
-                for (int k=0; k<x; k++) {
-                    v++;
-                    for (int d=0; d<dim; d++) {
-                        input[n++] = (d+1) << 24 | v;
-                    }
-                }
-                for (int a=0; a<y; a++) {
-                    v++;
-                    input[n++] = (a+1) << 24 | v;
-                }
-            }
-        }
-
-        return input;
+        feature_maps fms(dim, img_h, inputs, same_conv, channel);
+        fms.format(input, output);
+        write_file(output_file, output);
     }
 
-    std::vector<float> make_inputf() {
-        std::vector<float> input(img_h*img_h*inputs, value);
+    template<class T>
+    void make_input(std::vector<T> &input) {
+        input = std::vector<T>(channel*img_h*img_h*inputs, value);
         if (value)
-            return input;
+            return;
 
-        float v = 0.0;
+        T v = 0.0;
         int n = 0;
-        int x = img_h/dim;
-        int y = img_h%dim;
 
-        for (int i=0; i<inputs; i++) {
-            for (int j=0; j<img_h; j++) {
-                for (int k=0; k<x; k++) {
+        for (int a=0; a<inputs; a++) {
+            for (int i=0; i<img_h; i++) {
+                for (int j=0; j<img_h; j++) {
                     v++;
-                    for (int d=0; d<dim; d++) {
+                    for (int k=0; k<channel; k++) {
                         input[n++] = v;
                     }
                 }
-                for (int a=0; a<y; a++) {
-                    v++;
-                    input[n++] = v;
-                }
             }
         }
-
-        return input;
     }
 
 private:
     std::string output_file;
     int dim;
-    int inputs;
+    int inputs = 1;
     int img_h;
+    int channel = 1;
     uint32_t same_conv = 0;
     uint32_t value = 0;
     bool use_float = false;
