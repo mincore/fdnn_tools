@@ -391,12 +391,12 @@ struct feature_maps {
 
         const F *psrc = &src[0];
         F *pdst = &dst[0] + pad0_ * img_h_ + pad0_;
-        int diff = std::max(img_h_ - img_origin_h_, 1);
+        int diff = img_h_ - img_origin_h_ + 1;
 
         for (int i=0; i<img_count_ * img_origin_h_; i++) {
             memcpy(pdst, psrc, img_origin_h_*sizeof(F));
             psrc += img_origin_h_;
-            pdst += (i > 0 && (i%img_origin_h_ == 0)) ? (diff*img_h_) : img_h_;
+            pdst += ((i+1)%img_origin_h_ == 0) ? (diff*img_h_) : img_h_;
         }
     }
 

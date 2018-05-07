@@ -8,8 +8,8 @@ model: src/model.o
 dump: src/dump.o
 	g++ $^ -o $@
 
-%.o:%.c fpga_format.h
-	g++ $(CXXFLAGS) $< -o $@
+%.o:%.cpp src/fpga_format.h
+	g++ $(CXXFLAGS) $< -c -o $@
 
 clean:
-	rm -f model dump 
+	rm -f model dump src/*.o
