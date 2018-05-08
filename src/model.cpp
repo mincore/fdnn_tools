@@ -73,22 +73,23 @@ public:
     param_t(const std::string &cmd, const std::string &desc) {
         sub = app.add_subcommand(cmd, desc);
         sub->add_option("--output", output_file, "the file to write")->required();
-        sub->add_option("--rand", rand_range, "rand 10 20, rand from 10 to 20");
         sub->add_option("--wstep", w_step, "w_step");
         sub->add_option("--cstep", c_step, "c_step");
         sub->add_option("--rmin", r_min, "r_min");
         sub->add_option("--rmax", r_max, "r_max");
         sub->add_flag("-f,--float", use_float, "use float");
+        sub->add_flag("--rand", use_rand, "rand");
         sub->add_flag("--save-src", save_src, "save xxx.bin.src file");
     }
 
     virtual ~param_t() {}
     virtual bool run() = 0;
     bool init() {
-        if (rand_range[0] <= rand_range[1]) {
-            use_rand = true;
-            rd.set_min_max(rand_range[0], rand_range[1]);
+        if (r_max < r_min) {
+            r_max = r_min;
         }
+        
+        rd.set_min_max(r_min, r_max);
         
         return sub && *sub; 
     }
