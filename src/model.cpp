@@ -31,6 +31,15 @@ CLI::Option *GetOpt(CLI::App *app, const std::string &name)
     return NULL;
 }
 
+uint32_t vnext(uint32_t& v, uint32_t base, uint32_t min, uint32_t max) {
+    if (base > min && base < max) min = base;
+    if (v < min) v = min;
+    if (v > max) v = min;
+    uint32_t ret = v;
+    v++;
+    return ret;
+}
+
 class xrand {
 public:
     void set_min_max(uint32_t min, uint32_t max) {
@@ -65,6 +74,10 @@ public:
         sub = app.add_subcommand(cmd, desc);
         sub->add_option("--output", output_file, "the file to write")->required();
         sub->add_option("--rand", rand_range, "rand 10 20, rand from 10 to 20");
+        sub->add_option("--wstep", w_step, "w_step");
+        sub->add_option("--cstep", c_step, "c_step");
+        sub->add_option("--rmin", r_min, "r_min");
+        sub->add_option("--rmax", r_max, "r_max");
         sub->add_flag("-f,--float", use_float, "use float");
         sub->add_flag("--save-src", save_src, "save xxx.bin.src file");
     }
@@ -72,13 +85,9 @@ public:
     virtual ~param_t() {}
     virtual bool run() = 0;
     bool init() {
-        if (GetOpt(sub, "--rand")) {
+        if (rand_range[0] <= rand_range[1]) {
             use_rand = true;
-            if (rand_range.size() > 0) {
-                auto min = rand_range[0];
-                auto max = rand_range.size() > 1 ? rand_range[1] : min;
-                rd.set_min_max(min, max);
-            }
+            rd.set_min_max(rand_range[0], rand_range[1]);
         }
         
         return sub && *sub; 
@@ -92,8 +101,12 @@ protected:
     bool use_float = false;
     bool save_src = false;
     bool use_rand = false;
-    std::vector<uint32_t> rand_range;
+    std::vector<uint32_t> rand_range = {1, 0};
     xrand rd;
+    int w_step = 0;
+    int c_step = 0;
+    int r_min = 0;
+    int r_max = 0x7fffffff;
 };
 
 class test_param_t: public param_t {
@@ -168,9 +181,12 @@ public:
 
         for (int i=0; i<outputs; i++) {
             for (int j=0; j<inputs; j++) {
-                T v = 0.0;
+                
+                uint32_t base = r_min + i*c_step + j*w_step;
+                uint32_t v = base;
+                
                 for (int k=0; k<size; k++) {
-                    input[n++] = use_rand ? rd : v++;
+                    input[n++] = use_rand ? rd : vnext(v, base, r_min, r_max);
                 }
             }
         }
@@ -219,9 +235,15 @@ public:
     void make_input(std::vector<T> &input) {
         input = std::vector<T>(inputs, 0);
 
-        T v = 0;
-        for (size_t i=0; i<input.size(); i++, v++) {
+        uint32_t v = r_min;
+        if (c_step == 0)
+            c_step = 1;
+        
+        for (size_t i=0; i<input.size(); i++) {
+            if (v > r_max)
+                v = r_min;
             input[i] = use_rand ? rd : v;
+            v += c_step;
         }
     }
 
@@ -270,9 +292,11 @@ public:
 
         for (int i=0; i<outputs; i++) {
             int n = 0;
-            T v = 0;
-            for (int j=0; j<inputs; j++, n++, v++) {
-                input[i*inputs + n] = use_rand ? rd : v;
+            uint32_t base = r_min + i*c_step;
+            uint32_t v = base;
+ 
+            for (int j=0; j<inputs; j++, n++) {
+                input[i*inputs + n] = use_rand ? rd : vnext(v, base, r_min, r_max);
             }
         }
     }
@@ -290,7 +314,7 @@ public:
         sub->add_option("--same-conv", same_conv, "padding by same conv");
         sub->add_option("--channel", channel, "the channel of img, default 1");
         sub->add_flag("--fm", for_fm, "for feature_map");
-        sub->add_flag("--fm-inc-one-by-one", fm_inc_one_by_one, "feature_map inc one by one");
+        sub->add_option("--fstep", f_step, "f_step");
     }
 
     bool run() {
@@ -321,15 +345,16 @@ public:
     void make_input(std::vector<T> &input) {
         input = std::vector<T>(channel*img_h*img_h, 0);
 
-        T v = 0.0;
         int n = 0;
+        uint32_t v = 0;
 
         if (for_fm) {
             for (int k=0; k<channel; k++) {
-                v = 0;
+                uint32_t base = r_min + k*f_step;
+                v = base;
                 for (int i=0; i<img_h; i++) {
                     for (int j=0; j<img_h; j++) {
-                        input[n++] = use_rand ? rd : (fm_inc_one_by_one ? (k+1) : v++);
+                        input[n++] = use_rand ? rd : vnext(v, base, r_min, r_max);
                     }
                 }
             }
@@ -352,6 +377,7 @@ private:
     uint32_t same_conv = 0;
     bool for_fm = false;
     bool fm_inc_one_by_one = false;
+    int f_step;
 };
 
 int main(int argc, char *argv[])
