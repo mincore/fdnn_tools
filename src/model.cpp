@@ -152,7 +152,6 @@ private:
     int dim;
     int inputs;
     int outputs;
-    bool use_float = false;
 };
 
 template<class A>
@@ -329,7 +328,6 @@ private:
     int img_h;
     int channel = 1;
     uint32_t same_conv = 0;
-    bool use_float = false;
     bool for_fm = false;
     bool fm_inc_one_by_one = false;
 };
