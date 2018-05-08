@@ -165,19 +165,19 @@ struct weight {
 class conv_fcw {
 public:
     conv_fcw(int inputs, int outputs): inputs_(inputs), outputs_(outputs) {
-        cell_n_stride_ = (round_up(inputs_, block_n_pixel_) / block_n_pixel_) * block_n_stride_;
-        cell_n_groups_ = round_up(inputs, 480) / 480;
+        cell_n_groups_ = round_up(inputs, 48) / 48;
+        cell_size_ = round_up(inputs, 480);
     }
 
-    int get_group_addr(int cell, int group) {
-        int addr = cell * cell_n_stride_ * STRIDE + (group/2) * group_n_stride_ * STRIDE;
+    int get_group_addr(int cell, int group, int index = 0) {
+        int addr = cell * cell_size_ + (group/2) * group_n_stride_ * STRIDE;
         if (group%2)
             addr += HALF_STRIDE;
-        return addr;
+        return addr + index * STRIDE;
     }
 
-    int size() { return cell_n_stride_ * outputs_ * STRIDE; }
     int group_size() { return group_n_stride_*HALF_STRIDE; }
+    int size() { return cell_size_ * outputs_; }
 
     template<class F>
     bool format(const std::vector<F> &input, std::vector<F> &output) {
@@ -186,25 +186,21 @@ public:
 
         output = std::vector<F>(size(), 0);
         const F *in = &input[0];
-        F *out = &output[0];
 
         for (int i=0; i<outputs_; i++) {
+            int input_left = inputs_;
             for (int j=0; j<cell_n_groups_; j++) {
-                out = &output[get_group_addr(i, j)];
-                in += fill_group(in, out);
+                for (int k=0; input_left && k<group_n_stride_; k++) {
+                    F* out = &output[get_group_addr(i, j, k)];
+                    int size = std::min(input_left, HALF_STRIDE);
+                    memcpy(out, in, size*4);
+                    input_left -= size;
+                    in += size;
+                }
             }
         }
 
         return true;
-    }
-
-private:
-    template<class F>
-    int fill_group(const F *in, F *out) {
-        for (int k=0; k<group_n_stride_; k++) {
-            memcpy(out, in, HALF_STRIDE*4);
-        }
-        return group_size();
     }
 
 private:
@@ -215,8 +211,8 @@ private:
 private:
     int inputs_;
     int outputs_;
-    int cell_n_stride_;
     int cell_n_groups_;
+    int cell_size_;
 };
 
 static void test_conv_fcw() {
@@ -228,12 +224,12 @@ static void test_conv_fcw() {
 class fc_fcw {
 public:
     fc_fcw(int inputs, int outputs): inputs_(inputs), outputs_(outputs) {
-        cell_n_stride_ = round_up(inputs_ / STRIDE, block_n_stride_);
+        cell_n_stride_ = round_up(inputs_, STRIDE * block_n_stride_) / STRIDE;
     }
 
     int get_cell_addr(int cell) { return cell * cell_n_stride_ * STRIDE; }
-    int size() { return cell_n_stride_ * outputs_ * STRIDE; }
-    int cell_size() { return block_n_stride_*HALF_STRIDE; }
+    int cell_size() { return cell_n_stride_ * STRIDE; }
+    int size() { return outputs_ * cell_size(); }
 
     template<class F>
     bool format(const std::vector<F> &input, std::vector<F> &output) {
@@ -243,19 +239,13 @@ public:
         output = std::vector<F>(size(), 0);
         const F *in = &input[0];
 
-        for (int i=0; i<outputs_; i++) {
-            F *out = &output[get_cell_addr(i)];
-            in += fill_cell(in, out);
+        for (int cell=0; cell<outputs_; cell++) {
+            F *out = &output[get_cell_addr(cell)];
+            memcpy(out, in, inputs_*sizeof(F));
+            in += inputs_;
         }
 
         return true;
-    }
-
-private:
-    template<class F>
-    int fill_cell(const F *in, F *out) {
-        memcpy(out, in, inputs_);
-        return cell_size();
     }
 
 private:
