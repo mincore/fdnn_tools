@@ -19,57 +19,87 @@ using namespace kx;
 
 CLI::App app{"generic model program"};
 
+CLI::Option *GetOpt(CLI::App *app, const std::string &name)
+{
+    auto opts = app->get_options();
+    for (auto &i: opts) {
+        if (i->get_name() == name) {
+            return i;
+        }
+    }
+    
+    return NULL;
+}
+
 class xrand {
 public:
-    operator uint32_t () {
-        return rd();
+    void set_min_max(uint32_t min, uint32_t max) {
+        min_ = min;
+        max_ = max;
     }
 
-    operator float() {
-        return ((float)(rd() % 0xffff)) / 0xffff;
+     operator uint32_t () {
+        if (min_ == max_)
+            return min_;
+
+        return min_ + rd() % (max_ - min_);
+    }
+
+     operator float () {
+        if (min_ == max_)
+            return min_;
+
+        uint32_t n = min_ + rd() % (max_ - min_);
+        return (float)n + (float)(rd() % 0xffff) / 0xffff;
     }
 
 private:
     std::random_device rd;
+    uint32_t min_ = 0;
+    uint32_t max_ = RAND_MAX;
 };
-
-xrand rd;
 
 class param_t {
 public:
     param_t(const std::string &cmd, const std::string &desc) {
         sub = app.add_subcommand(cmd, desc);
         sub->add_option("--output", output_file, "the file to write")->required();
-        sub->add_option("--value", value, "make by a value");
+        sub->add_option("--rand", rand_range, "rand 10 20, rand from 10 to 20");
         sub->add_flag("-f,--float", use_float, "use float");
-        sub->add_flag("--rand", rand, "rand");
         sub->add_flag("--save-src", save_src, "save xxx.bin.src file");
     }
 
     virtual ~param_t() {}
     virtual bool run() = 0;
-    bool ok() { return sub && *sub; }
+    bool init() {
+        if (GetOpt(sub, "--rand")) {
+            use_rand = true;
+            if (rand_range.size() > 0) {
+                auto min = rand_range[0];
+                auto max = rand_range.size() > 1 ? rand_range[1] : min;
+                rd.set_min_max(min, max);
+            }
+        }
+        
+        return sub && *sub; 
+    }
+
     std::string name() { return sub ? sub->get_name() : ""; }
 
 protected:
     CLI::App* sub = NULL;
     std::string output_file;
     bool use_float = false;
-    bool rand = false;
     bool save_src = false;
-    uint32_t value = 0;
+    bool use_rand = false;
+    std::vector<uint32_t> rand_range;
+    xrand rd;
 };
 
 class test_param_t: public param_t {
 public:
     test_param_t(): param_t("test", "test") {
-        auto opts = sub->get_options();
-        for (auto &i: opts) {
-            if (i->get_name() == "--output") {
-                sub->remove_option(i);
-                break;
-            }
-        }
+        sub->remove_option(GetOpt(sub, "--output"));
     }
 
     bool run() {
@@ -132,9 +162,7 @@ public:
     template<class T>
     void make_input(std::vector<T> &input) {
         int size = dim*dim;
-        input = std::vector<T>(outputs*inputs*size, value);
-        if (value)
-            return;
+        input = std::vector<T>(outputs*inputs*size, 0);
 
         int n = 0;
 
@@ -142,7 +170,7 @@ public:
             for (int j=0; j<inputs; j++) {
                 T v = 0.0;
                 for (int k=0; k<size; k++) {
-                    input[n++] = rand ? rd : v++;
+                    input[n++] = use_rand ? rd : v++;
                 }
             }
         }
@@ -189,13 +217,11 @@ public:
 
     template<class T>
     void make_input(std::vector<T> &input) {
-        input = std::vector<T>(inputs, value);
-        if (value)
-            return;
+        input = std::vector<T>(inputs, 0);
 
         T v = 0;
         for (size_t i=0; i<input.size(); i++, v++) {
-            input[i] = rand ? rd : v;
+            input[i] = use_rand ? rd : v;
         }
     }
 
@@ -240,15 +266,13 @@ public:
 
     template<class T>
     void make_input(std::vector<T> &input) {
-        input = std::vector<T>(inputs*outputs, value);
-        if (value)
-            return;
+        input = std::vector<T>(inputs*outputs, 0);
 
         for (int i=0; i<outputs; i++) {
             int n = 0;
             T v = 0;
             for (int j=0; j<inputs; j++, n++, v++) {
-                input[i*inputs + n] = rand ? rd : v;
+                input[i*inputs + n] = use_rand ? rd : v;
             }
         }
     }
@@ -295,9 +319,7 @@ public:
 
     template<class T>
     void make_input(std::vector<T> &input) {
-        input = std::vector<T>(channel*img_h*img_h, value);
-        if (value)
-            return;
+        input = std::vector<T>(channel*img_h*img_h, 0);
 
         T v = 0.0;
         int n = 0;
@@ -307,7 +329,7 @@ public:
                 v = 0;
                 for (int i=0; i<img_h; i++) {
                     for (int j=0; j<img_h; j++) {
-                        input[n++] = rand ? rd : (fm_inc_one_by_one ? (k+1) : v++);
+                        input[n++] = use_rand ? rd : (fm_inc_one_by_one ? (k+1) : v++);
                     }
                 }
             }
@@ -316,7 +338,7 @@ public:
                 for (int j=0; j<img_h; j++) {
                     v++;
                     for (int k=0; k<channel; k++) {
-                        input[n++] = rand ? rd : v;
+                        input[n++] = use_rand ? rd : v;
                     }
                 }
             }
@@ -351,7 +373,7 @@ int main(int argc, char *argv[])
     }
 
     for (auto &param : params) {
-        if (param->ok()) {
+        if (param->init()) {
             printf("%s %s\n", param->name().c_str(), param->run() ? "done" : "failed");
         }
     }
