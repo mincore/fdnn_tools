@@ -327,7 +327,7 @@ static void test_fc_bias() {
 }
 
 struct feature_maps {
-    feature_maps(int dim, int img_h, int img_count, bool for_same_conv = false, int img_channel = 1):
+    feature_maps(int dim, int img_h, int img_count, int img_channel = 1, bool for_same_conv = false):
         conv_h_(dim), img_origin_h_(img_h), img_count_(img_count) {
         switch (dim) {
         case 1: stride_imgs_ = 32; round_imgs_ = 160; break;

@@ -139,6 +139,129 @@ public:
     }
 };
 
+class format_weight_param_t: public param_t {
+public:
+    format_weight_param_t(): param_t("format-weight", "format weight to fpga format") {
+        sub->add_option("--input", input_file, "the file to read")->required();
+        sub->add_set("--dim", dim_, {1,3,5,7}, "the dim of conv")->required();
+        sub->add_option("--inputs", inputs, "input count")->required();
+        sub->add_option("--outputs", outputs, "output count")->required();
+    }
+
+    bool run() {
+        weight w(dim_, inputs, outputs);
+        std::vector<uint32_t> output;
+        return format_to_fpga(w, output, input_file, output_file);
+    }
+
+private:
+    std::string input_file;
+    std::string output_file;
+    int dim_;
+    int inputs;
+    int outputs;
+};
+
+class format_convfcw_param_t: public param_t {
+public:
+    format_convfcw_param_t(): param_t("format-convfcw", "format conv_fc weight to fpga format") {
+        sub->add_option("--input", input_file, "the file to read")->required();
+        sub->add_option("--inputs", inputs, "input count")->required();
+        sub->add_option("--outputs", outputs, "output count")->required();
+    }
+
+    bool run() {
+        conv_fcw w(inputs, outputs);
+        std::vector<uint32_t> output;
+        return format_to_fpga(w, output, input_file, output_file);
+    }
+
+private:
+    std::string input_file;
+    int inputs;
+    int outputs;
+};
+
+class format_fcfcw_param_t: public param_t {
+public:
+    format_fcfcw_param_t(): param_t("format-fcfcw", "format fc_fc weight to fpga format") {
+        sub->add_option("--input", input_file, "the file to read")->required();
+        sub->add_option("--inputs", inputs, "input count")->required();
+        sub->add_option("--outputs", outputs, "output count")->required();
+    }
+
+    bool run() {
+        fc_fcw w(inputs, outputs);
+        std::vector<uint32_t> output;
+        return format_to_fpga(w, output, input_file, output_file);
+    }
+
+private:
+    std::string input_file;
+    int inputs;
+    int outputs;
+};
+
+class format_bias_param_t: public param_t {
+public:
+    format_bias_param_t(): param_t("format-bias", "format bias to fpga format") {
+        sub->add_option("--input", input_file, "the file to read")->required();
+        sub->add_option("--inputs", inputs, "input count")->required();
+    }
+
+    bool run() {
+        bias b(inputs);
+        std::vector<uint32_t> output;
+        return format_to_fpga(b, output, input_file, output_file);
+    }
+
+private:
+    std::string input_file;
+    int inputs;
+};
+
+class format_fcbias_param_t: public param_t {
+public:
+    format_fcbias_param_t(): param_t("format-fcbias", "format fcbias to fpga format") {
+        sub->add_option("--input", input_file, "the file to read")->required();
+        sub->add_option("--inputs", inputs, "input count")->required();
+    }
+
+    bool run() {
+        fc_bias b(inputs);
+        std::vector<uint32_t> output;
+        return format_to_fpga(b, output, input_file, output_file);
+    }
+
+private:
+    std::string input_file;
+    int inputs;
+};
+
+class format_img_param_t: public param_t {
+public:
+    format_img_param_t(): param_t("format-img", "format img to fpga format") {
+        sub->add_option("--input", input_file, "the file to read")->required();
+        sub->add_set("--dim", dim, {1,3,5,7}, "the dim of conv")->required();
+        sub->add_option("--imgh", img_h, "img height")->required();
+        sub->add_option("--channel", channel, "the channel of img, default 1");
+        sub->add_flag("--same-conv", same_conv, "padding by same conv");
+    }
+
+    bool run() {
+        feature_maps fms(dim, img_h, channel, same_conv);
+        std::vector<uint32_t> output;
+        return format_to_fpga(fms, output, input_file, output_file);
+    }
+
+private:
+    std::string input_file;
+    int dim;
+    int img_h;
+    int channel = 1;
+    bool same_conv = false;
+};
+
 class make_weight_param_t: public param_t {
 public:
     make_weight_param_t(): param_t("make-weight", "make a weight with specified value") {
@@ -367,9 +490,9 @@ public:
     make_img_param_t(): param_t("make-img", "make an img with specified value") {
         sub->add_set("--dim", dim, {1,3,5,7}, "the dim of conv")->required();
         sub->add_option("--imgh", img_h, "the height of img")->required();
-        sub->add_option("--same-conv", same_conv, "padding by same conv");
         sub->add_option("--channel", channel, "the channel of img, default 1");
         sub->add_flag("--fm", for_fm, "for feature_map");
+        sub->add_flag("--same-conv", same_conv, "padding by same conv");
         sub->add_option("--fstep", f_step, "f_step");
     }
 
@@ -388,13 +511,18 @@ public:
         std::vector<T> output;
         make_input(input);
 
+        if (save_src) {
+            write_file(output_file + ".src", input);
+        }
+
         if (for_fm) {
             feature_maps fms(dim, img_h, channel, same_conv);
             fms.format(input, output);
-            write_file(output_file, output);
         } else {
-            write_file(output_file, input);
+            output = input;
         }
+
+        write_file(output_file, output);
     }
 
     template<class T>
@@ -430,7 +558,7 @@ private:
     int dim;
     int img_h;
     int channel = 1;
-    uint32_t same_conv = 0;
+    bool same_conv = false;
     bool for_fm = false;
     bool fm_inc_one_by_one = false;
     int f_step;
@@ -440,6 +568,12 @@ int main(int argc, char *argv[])
 {
     std::vector<std::shared_ptr<param_t> > params = {
         std::make_shared<test_param_t>(),
+        std::make_shared<format_weight_param_t>(),
+        std::make_shared<format_bias_param_t>(),
+        std::make_shared<format_convfcw_param_t>(),
+        std::make_shared<format_fcfcw_param_t>(),
+        std::make_shared<format_fcbias_param_t>(),
+        std::make_shared<format_img_param_t>(),
         std::make_shared<make_weight_param_t>(),
         std::make_shared<make_bias_param_t<bias> >("bias"),
         std::make_shared<make_bias_param_t<fc_bias> >("fcbias"),
