@@ -27,7 +27,7 @@ CLI::Option *GetOpt(CLI::App *app, const std::string &name)
             return i;
         }
     }
-    
+
     return NULL;
 }
 
@@ -88,10 +88,10 @@ public:
         if (r_max < r_min) {
             r_max = r_min;
         }
-        
+
         rd.set_min_max(r_min, r_max);
-        
-        return sub && *sub; 
+
+        return sub && *sub;
     }
 
     std::string name() { return sub ? sub->get_name() : ""; }
@@ -161,11 +161,11 @@ public:
         std::vector<T> input;
         std::vector<T> output;
         make_input(input);
-        
+
         if (save_src) {
             write_file(output_file + ".src", input);
         }
-        
+
         weight w(dim, inputs, outputs);
         w.format(input, output);
         write_file(output_file, output);
@@ -182,10 +182,10 @@ public:
 
         for (int i=0; i<outputs; i++) {
             for (int j=0; j<inputs; j++) {
-                
+
                 uint32_t base = r_min + i*c_step + j*w_step;
                 uint32_t v = base;
-                
+
                 for (int k=0; k<size; k++) {
                     input[n++] = use_rand ? rd : vnext(v, base, r_min, r_max);
                 }
@@ -220,7 +220,7 @@ public:
         std::vector<T> input;
         std::vector<T> output;
         make_input(input);
-        
+
         if (save_src) {
             write_file(output_file + ".src", input);
         }
@@ -239,7 +239,7 @@ public:
         uint32_t v = r_min;
         if (c_step == 0)
             c_step = 1;
-        
+
         for (size_t i=0; i<input.size(); i++) {
             if (v > r_max)
                 v = r_min;
@@ -275,7 +275,7 @@ public:
         std::vector<T> input;
         std::vector<T> output;
         make_input(input);
-        
+
         if (save_src) {
             write_file(output_file + ".src", input);
         }
@@ -295,7 +295,7 @@ public:
             int n = 0;
             uint32_t base = r_min + i*c_step;
             uint32_t v = base;
- 
+
             for (int j=0; j<inputs; j++, n++) {
                 input[i*inputs + n] = use_rand ? rd : vnext(v, base, r_min, r_max);
             }
@@ -306,6 +306,61 @@ private:
     int inputs;
     int outputs;
 };
+
+template<class A>
+class make_bn_param_t: public param_t {
+public:
+    make_bn_param_t(const std::string &name): param_t(std::string("make-") + name, "make a bn with specified value") {
+        sub->add_option("--inputs", inputs, "inputs")->required();
+    }
+
+    bool run() {
+        if (use_float)
+            _run<float>();
+        else
+            _run<uint32_t>();
+
+        return true;
+    }
+
+    template<class T>
+    bool _run() {
+        std::vector<T> input;
+        std::vector<T> output;
+
+        make_input(input);
+
+        if (save_src) {
+            write_file(output_file + ".src", input);
+        }
+
+        A b(inputs);
+        b.format(&input[0], &input[0], output);
+        write_file(output_file, output);
+
+        return true;
+    }
+
+    template<class T>
+    void make_input(std::vector<T> &input) {
+        input = std::vector<T>(inputs, 0);
+
+        uint32_t v = r_min;
+        if (c_step == 0)
+            c_step = 1;
+
+        for (size_t i=0; i<input.size(); i++) {
+            if (v > r_max)
+                v = r_min;
+            input[i] = use_rand ? rd : v;
+            v += c_step;
+        }
+    }
+
+private:
+    int inputs;
+};
+
 
 class make_img_param_t: public param_t {
 public:
@@ -332,7 +387,7 @@ public:
         std::vector<T> input;
         std::vector<T> output;
         make_input(input);
-        
+
         if (for_fm) {
             feature_maps fms(dim, img_h, channel, same_conv);
             fms.format(input, output);
@@ -390,6 +445,8 @@ int main(int argc, char *argv[])
         std::make_shared<make_bias_param_t<fc_bias> >("fcbias"),
         std::make_shared<make_fcw_param_t<conv_fcw> >("convfcw"),
         std::make_shared<make_fcw_param_t<fc_fcw> >("fcfcw"),
+        std::make_shared<make_bn_param_t<bn_conv> >("bnconv"),
+        std::make_shared<make_bn_param_t<bn_fc> >("bnfc"),
         std::make_shared<make_img_param_t>(),
     };
 

@@ -433,8 +433,8 @@ public:
 
     template<class F>
     bool format(const void *pDataW, const void *pDataB, std::vector<F> &output) {
-        const char *pweight = (const char *)pDataW;
-        const char *pbias = (const char *)pDataB;
+        const F *pweight = (const F *)pDataW;
+        const F *pbias = (const F *)pDataB;
         output = std::vector<F>(size(), 0);
 
         for (int i=0; i<inputs_; i++) {
@@ -460,8 +460,8 @@ public:
 
     template<class F>
     bool format(const void *pDataW, const void *pDataB, std::vector<F> &output) {
-        const char *pweight = (const char *)pDataW;
-        const char *pbias = (const char *)pDataB;
+        const F *pweight = (const F *)pDataW;
+        const F *pbias = (const F *)pDataB;
         output = std::vector<F>(size(), 0);
 
         for (int i=0; i<inputs_; i++) {
