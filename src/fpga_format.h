@@ -330,11 +330,14 @@ struct feature_maps {
     feature_maps(int dim, int img_h, int img_count, int img_channel = 1, bool for_same_conv = false):
         conv_h_(dim), img_origin_h_(img_h), img_count_(img_count) {
         switch (dim) {
-        case 1: stride_imgs_ = 32; round_imgs_ = 160; break;
-        case 3: stride_imgs_ = 10; round_imgs_ = 50;  break;
-        case 5: stride_imgs_ = 4;  round_imgs_ = 20;  break;
-        case 7: stride_imgs_ = 2;  round_imgs_ = 10;  break;
+        case 1: stride_imgs_ = 32; break;
+        case 3: stride_imgs_ = 10; break;
+        case 5: stride_imgs_ = 4;  break;
+        case 7: stride_imgs_ = 2;  break;
         }
+
+        const int round_cols = 4;
+        round_imgs_ = stride_imgs_ * round_cols;
 
         if (for_same_conv)
             pad0_ = (dim == 1) ? 0 : (dim - 1)/2;
