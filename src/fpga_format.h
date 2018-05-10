@@ -51,7 +51,6 @@ bool format_to_fpga(T &t, std::vector<F> &output,
     if (!read_file(input_file, input))
         return false;
 
-
     bool ret = t.format(input, output);
     if (ret && !output_file.empty())
         write_file(output_file, output);
@@ -75,7 +74,7 @@ bool format_to_fpga(T &t, const std::vector<F> &input, std::vector<F> &output)
 struct weight {
     weight(int dim, int inputs, int outputs): dim_(dim), inputs_(inputs), outputs_(outputs) {
         switch (dim_) {
-        case 1: block_w_convs_ = 16; block_h_convs_ = 10; break;
+        case 1: block_w_convs_ = 16; block_h_convs_ =  8; break;
         case 3: block_w_convs_ =  5; block_h_convs_ =  8; break;
         case 5: block_w_convs_ =  2; block_h_convs_ =  8; break;
         case 7: block_w_convs_ =  1; block_h_convs_ =  8; break;
@@ -164,16 +163,22 @@ struct weight {
 
 class conv_fcw {
 public:
-    conv_fcw(int inputs, int outputs): inputs_(inputs), outputs_(outputs) {
-        cell_n_groups_ = round_up(inputs, 48) / 48;
-        cell_size_ = round_up(inputs, 480);
+    conv_fcw(int dim, int inputs, int outputs): dim_(dim), inputs_(inputs), outputs_(outputs) {
+        assert(inputs % 2 == 0);
+        int dim_inputs = inputs/2*dim_*dim_;
+        cell_n_groups_ = (round_up(dim_inputs, group_size()) / group_size()) * 2;
+        cell_size_ = round_up(dim_inputs, block_n_stride_ * HALF_STRIDE) * 2;
     }
 
-    int get_group_addr(int cell, int group, int index = 0) {
-        int addr = cell * cell_size_ + (group/2) * group_n_stride_ * STRIDE;
-        if (group%2)
-            addr += HALF_STRIDE;
-        return addr + index * STRIDE;
+    int get_addr(int cell, int i_input, int index) {
+        int n = (i_input/2) * dim_*dim_ + index;
+        int addr = cell * cell_size_;
+
+        addr +=  (i_input % 2 == 0 ? 0 : HALF_STRIDE);
+        addr += (n / HALF_STRIDE) * STRIDE;
+        addr += (n % HALF_STRIDE);
+
+        return addr;
     }
 
     int group_size() { return group_n_stride_*HALF_STRIDE; }
@@ -181,21 +186,16 @@ public:
 
     template<class F>
     bool format(const std::vector<F> &input, std::vector<F> &output) {
-        if ((int)input.size() < outputs_*inputs_)
+        if ((int)input.size() < outputs_*inputs_*dim_*dim_)
             return false;
 
         output = std::vector<F>(size(), 0);
-        const F *in = &input[0];
 
+        int n = 0;
         for (int i=0; i<outputs_; i++) {
-            int input_left = inputs_;
-            for (int j=0; j<cell_n_groups_; j++) {
-                for (int k=0; input_left && k<group_n_stride_; k++) {
-                    F* out = &output[get_group_addr(i, j, k)];
-                    int size = std::min(input_left, HALF_STRIDE);
-                    memcpy(out, in, size*4);
-                    input_left -= size;
-                    in += size;
+            for (int j=0; j<inputs_; j++) {
+                for (int k=0; k<dim_*dim_; k++) {
+                    output[get_addr(i, j, k)] = input[n++];
                 }
             }
         }
@@ -205,21 +205,15 @@ public:
 
 private:
     const int group_n_stride_ = 3;
-    const int block_n_stride_ = 15;
-    const int block_n_pixel_ = block_n_stride_ * STRIDE;
+    const int block_n_stride_ = 12;
 
 private:
+    int dim_;
     int inputs_;
     int outputs_;
     int cell_n_groups_;
     int cell_size_;
 };
-
-static void test_conv_fcw() {
-    conv_fcw w(512, 2);
-    assert(w.size() == 1920);
-    assert(w.get_group_addr(1, 3) == 1072);
-}
 
 class fc_fcw {
 public:
@@ -249,7 +243,7 @@ public:
     }
 
 private:
-    const int block_n_stride_ = 15;
+    const int block_n_stride_ = 12;
 
 private:
     int inputs_;
