@@ -110,35 +110,6 @@ protected:
     int r_max = 0x7fffffff;
 };
 
-class test_param_t: public param_t {
-public:
-    test_param_t(): param_t("test", "test") {
-        sub->remove_option(GetOpt(sub, "--output"));
-    }
-
-    bool run() {
-        printf("testing 1x1\n");
-        test_1x1();
-        printf("testing 3x3\n");
-        test_3x3();
-        printf("testing 5x5\n");
-        test_5x5();
-        printf("testing 7x7\n");
-        test_7x7();
-        printf("testing conv_fcw\n");
-        //test_conv_fcw();
-        printf("testing fc_fcw\n");
-        test_fc_fcw();
-        printf("testing bias\n");
-        test_bias();
-        printf("testing fc_bias\n");
-        test_fc_bias();
-        printf("testing feature_map\n");
-        test_feature_map();
-        return true;
-    }
-};
-
 class format_weight_param_t: public param_t {
 public:
     format_weight_param_t(): param_t("format-weight", "format weight to fpga format") {
@@ -625,7 +596,6 @@ private:
 int main(int argc, char *argv[])
 {
     std::vector<std::shared_ptr<param_t> > params = {
-        std::make_shared<test_param_t>(),
         std::make_shared<format_weight_param_t>(),
         std::make_shared<format_bias_param_t>(),
         std::make_shared<format_convfcw_param_t>(),

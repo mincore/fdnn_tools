@@ -74,7 +74,7 @@ bool format_to_fpga(T &t, const std::vector<F> &input, std::vector<F> &output)
 struct weight {
     weight(int dim, int inputs, int outputs): dim_(dim), inputs_(inputs), outputs_(outputs) {
         switch (dim_) {
-        case 1: block_w_convs_ = 16; block_h_convs_ =  8; break;
+        case 1: block_w_convs_ = 16; block_h_convs_ =  3*8; break;
         case 3: block_w_convs_ =  5; block_h_convs_ =  8; break;
         case 5: block_w_convs_ =  2; block_h_convs_ =  8; break;
         case 7: block_w_convs_ =  1; block_h_convs_ =  8; break;
@@ -125,22 +125,12 @@ struct weight {
             int conv_addr = cell_addr + get_conv_addr(conv, sub_conv);
             // n: the number in a conv
             for (int n=0; n<count; n++) {
-                int x = n % dim_;
-                int y = ( n / dim_ + sub_conv  ) % dim_;
+                int x = n / dim_;
+                int y = ( n % dim_ + sub_conv  ) % dim_;
                 int addr = conv_addr + x * STRIDE + y;
                 output[addr] = pconv[n];
             }
         }
-    }
-
-    int get_pixel_addr(int cell, int conv, int pixel) {
-        int cell_addr = get_cell_addr(cell);
-        int conv_addr = get_conv_addr(conv, 0);
-        int sub_conv = 0;
-        int n = pixel;
-        int x = n  % dim_;
-        int y = ( n / dim_ + sub_conv ) % dim_;
-        return cell_addr + conv_addr + x * 32 + y;
     }
 
     template<class F>
@@ -251,18 +241,12 @@ private:
     int cell_n_stride_;
 };
 
-static void test_fc_fcw() {
-    fc_fcw w(512, 2);
-    assert(w.size() == 1920);
-    assert(w.get_cell_addr(1) == 960);
-}
-
 class bias {
 public:
     bias(int inputs): inputs_(inputs) {}
 
-    int get_bias_addr(int index) { return (index/2)*STRIDE + (index%2); }
-    int size() { return (inputs_/2) * STRIDE; }
+    int get_bias_addr(int index) { return (index/2)*stride_ + (index%2); }
+    int size() { return (inputs_/2) * stride_; }
 
     template<class F>
     bool format(const std::vector<F> &input, std::vector<F> &output) {
@@ -280,21 +264,15 @@ public:
 
 private:
     int inputs_;
+    const int stride_ = 8;
 };
-
-static void test_bias() {
-    bias b(8);
-    assert(b.size() == 4*STRIDE);
-    assert(b.get_bias_addr(5) == 2*STRIDE+1);
-    assert(b.get_bias_addr(6) == 3*STRIDE+0);
-}
 
 class fc_bias {
 public:
     fc_bias(int inputs): inputs_(inputs) {}
 
-    int get_bias_addr(int index) { return index*STRIDE; }
-    int size() { return inputs_ * STRIDE; }
+    int get_bias_addr(int index) { return index*stride_; }
+    int size() { return inputs_ * stride_; }
 
     template<class F>
     bool format(const std::vector<F> &input, std::vector<F> &output) {
@@ -312,13 +290,8 @@ public:
 
 private:
     int inputs_;
+    const int stride_ = 8;
 };
-
-static void test_fc_bias() {
-    fc_bias b(8);
-    assert(b.size() == 8*STRIDE);
-    assert(b.get_bias_addr(5) == 5*STRIDE);
-}
 
 struct feature_maps {
     feature_maps(int dim, int img_h, int img_count, int img_channel = 1, bool for_same_conv = false):
@@ -472,99 +445,5 @@ public:
 private:
     int inputs_;
 };
-
-static void test_feature_map() {
-    feature_maps fms(3, 10, 54);
-
-    assert(fms.round_num() == 2);
-    assert(fms.map_pad() == 1);
-    assert(fms.size() == 2*5*12*4*32);
-    assert(fms.img_addr(3, 0) == 3*3);
-    assert(fms.img_addr(3, 2) == fms.img_addr(3, 0) + 12*2*32);
-    assert(fms.img_addr(7, 0) == 7*3+1);
-    assert(fms.img_addr(13, 0) == 12*32 + 3*3);
-    assert(fms.img_addr(17, 0) == 12*32 + 7*3 + 1);
-    assert(fms.img_addr(17, 2) == fms.img_addr(17, 0) + 12*2*32);
-}
-
-static void test_3x3() {
-    weight w(3, 64, 3);
-
-    assert(w.block_pad_w_ + w.block_w() == HALF_STRIDE);
-    assert(w.block_convs() == 40);
-    assert(w.cell_w_convs() == 5);
-    assert(w.cell_h_convs() == 16);
-    assert(w.cell_convs() == 80);
-    assert(w.cell_w() == 5*3);
-    assert(w.cell_h() == 2*8*3*3);
-
-    int base = 2*8*3*3*32 + 1*3*3*32 + 16 + 3;
-
-    assert(w.get_pixel_addr(3, 6, 0) == base);
-    assert(w.get_pixel_addr(3, 6, 3) == base + 32*0 + 1);
-    assert(w.get_pixel_addr(3, 6, 4) == base + 32*1 + 1);
-    assert(w.get_pixel_addr(3, 6, 5) == base + 32*2 + 1);
-    assert(w.get_pixel_addr(3, 6, 8) == base + 32*2 + 2);
-}
-
-static void test_5x5() {
-    weight w(5, 30, 3);
-
-    assert(w.block_pad_w_ + w.block_w() == HALF_STRIDE);
-    assert(w.block_convs() == 2*8);
-    assert(w.cell_w_convs() == 2);
-    assert(w.cell_h_convs() == 16);
-    assert(w.cell_convs() == 32);
-    assert(w.cell_w() == 2*5);
-    assert(w.cell_h() == 2*8*5*5);
-
-    int base = 2*8*5*5*32 + 1*5*5*32 + 16 + 5;
-
-    assert(w.get_pixel_addr(3, 3, 0) == base);
-    assert(w.get_pixel_addr(3, 3, 3) == base + 32*3 + 0);
-    assert(w.get_pixel_addr(3, 3, 4) == base + 32*4 + 0);
-    assert(w.get_pixel_addr(3, 3, 5) == base + 32*0 + 1);
-    assert(w.get_pixel_addr(3, 3, 8) == base + 32*3 + 1);
-}
-
-static void test_7x7() {
-    weight w(7, 16, 3);
-
-    assert(w.block_pad_w_ + w.block_w() == HALF_STRIDE);
-    assert(w.block_convs() == 1*8);
-    assert(w.cell_w_convs() == 1);
-    assert(w.cell_h_convs() == 16);
-    assert(w.cell_convs() == 16);
-    assert(w.cell_w() == 1*7);
-    assert(w.cell_h() == 2*8*7*7);
-
-    int base = 2*8*7*7*32 + 1*7*7*32 + 16 + 0;
-
-    assert(w.get_pixel_addr(3, 1, 0) == base);
-    assert(w.get_pixel_addr(3, 1, 3) == base + 32*3 + 0);
-    assert(w.get_pixel_addr(3, 1, 4) == base + 32*4 + 0);
-    assert(w.get_pixel_addr(3, 1, 5) == base + 32*5 + 0);
-    assert(w.get_pixel_addr(3, 1, 8) == base + 32*1 + 1);
-}
-
-static void test_1x1() {
-    weight w(1, 256, 3);
-
-    assert(w.block_pad_w_ + w.block_w() == HALF_STRIDE);
-    assert(w.block_convs() == 160);
-    assert(w.cell_w_convs() == 16);
-    assert(w.cell_h_convs() == 20);
-    assert(w.cell_convs() == 320);
-    assert(w.cell_w() == 16*1);
-    assert(w.cell_h() == 2*10*1);
-
-    int base = 20*1*32 + 16;
-
-    assert(w.get_pixel_addr(3, 0, 0) == base);
-    assert(w.get_pixel_addr(3, 3, 0) == base + 32*0 + 3);
-    assert(w.get_pixel_addr(3, 4, 0) == base + 32*0 + 4);
-    assert(w.get_pixel_addr(3, 17, 0) == base + 32*1 + 1);
-    assert(w.get_pixel_addr(3, 18, 0) == base + 32*1 + 2);
-}
 
 #endif
